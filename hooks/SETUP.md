@@ -34,10 +34,10 @@ This document explains how to configure Claude Code to send real-time notificati
            "hooks": [{ "type": "command", "command": "$HOME/.local/bin/c3-hook.sh Notification" }]
          }
        ],
-       "PreToolUse": [
+       "PermissionRequest": [
          {
            "matcher": "",
-           "hooks": [{ "type": "command", "command": "$HOME/.local/bin/c3-hook.sh PreToolUse" }]
+           "hooks": [{ "type": "command", "command": "$HOME/.local/bin/c3-hook.sh PermissionRequest" }]
          }
        ],
        "SessionStart": [
@@ -54,7 +54,7 @@ This document explains how to configure Claude Code to send real-time notificati
 
 ## How It Works
 
-- **PreToolUse**: Fires before Claude uses a tool (triggers "Awaiting Permission" state)
+- **PermissionRequest**: Fires when a permission dialog appears (triggers "Awaiting Permission" state)
 - **Notification**: Fires when Claude wants your attention (triggers "Awaiting Input" state)
 - **Stop**: Fires when Claude finishes responding (triggers "Complete" state)
 - **SessionStart**: Fires when a new session starts (triggers "Processing" state)
@@ -86,7 +86,7 @@ Check C3's logs for "Hook received:" messages, or open the Debug panel (press `D
 ```bash
 curl -X POST http://127.0.0.1:9398/hook \
   -H "Content-Type: application/json" \
-  -d '{"hook_type":"PreToolUse","cwd":"/path/to/project","tool_name":"Bash"}'
+  -d '{"hook_type":"PermissionRequest","cwd":"/path/to/project","tool_name":"Bash"}'
 ```
 
 ## Configuration

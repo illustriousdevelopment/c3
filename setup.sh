@@ -115,6 +115,21 @@ cp "$HOOK_SRC" "$HOOK_DEST"
 chmod +x "$HOOK_DEST"
 ok "Installed to $HOOK_DEST"
 
+# Copy icon for terminal-notifier
+ICON_SRC=""
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+for candidate in "$SCRIPT_DIR/src-tauri/icons/icon.png" "$SCRIPT_DIR/public/logo.png"; do
+    if [ -f "$candidate" ]; then
+        ICON_SRC="$candidate"
+        break
+    fi
+done
+if [ -n "$ICON_SRC" ]; then
+    mkdir -p "$HOME/.config/c3"
+    cp "$ICON_SRC" "$HOME/.config/c3/icon.png"
+    ok "Installed notification icon to ~/.config/c3/icon.png"
+fi
+
 echo ""
 
 # ─── Configure Claude Code hooks ────────────────────────────────────
@@ -148,10 +163,10 @@ C3_HOOKS=$(cat <<'HOOKS_JSON'
       "hooks": [{ "type": "command", "command": "$HOME/.local/bin/c3-hook.sh Notification" }]
     }
   ],
-  "PreToolUse": [
+  "PermissionRequest": [
     {
       "matcher": "",
-      "hooks": [{ "type": "command", "command": "$HOME/.local/bin/c3-hook.sh PreToolUse" }]
+      "hooks": [{ "type": "command", "command": "$HOME/.local/bin/c3-hook.sh PermissionRequest" }]
     }
   ],
   "SessionStart": [

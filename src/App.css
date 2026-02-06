@@ -1275,6 +1275,9 @@ body {
 .settings-modal {
   width: 440px;
   max-width: 90vw;
+  max-height: 85vh;
+  display: flex;
+  flex-direction: column;
   background: var(--bg-secondary);
   border: 1px solid var(--border-color);
   border-radius: 12px;
@@ -1320,6 +1323,8 @@ body {
 
 .settings-content {
   padding: 20px;
+  overflow-y: auto;
+  flex: 1;
 }
 
 .settings-group {

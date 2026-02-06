@@ -12,6 +12,7 @@
 C3_HOOK_URL="${C3_HOOK_URL:-http://127.0.0.1:9398/hook}"
 
 # Hook type is passed as first argument (Stop, Notification, PermissionRequest, SessionStart)
+# Note: We use PermissionRequest (not PreToolUse) — it only fires when user approval is needed.
 HOOK_TYPE="${1:-unknown}"
 
 # Read the hook data from stdin

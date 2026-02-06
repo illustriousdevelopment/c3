@@ -633,11 +633,21 @@ pub fn scan_tmux(state: &Arc<AppState>, app_handle: &AppHandle) {
 }
 
 /// Start the periodic tmux scanner
-pub async fn start_tmux_scanner(state: Arc<AppState>, app_handle: AppHandle) {
+pub async fn start_tmux_scanner(
+    state: Arc<AppState>,
+    app_handle: AppHandle,
+    mut shutdown: tokio::sync::watch::Receiver<bool>,
+) {
     log::info!("Starting tmux scanner (polling every 3s)");
 
     loop {
         scan_tmux(&state, &app_handle);
-        tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
+        tokio::select! {
+            _ = tokio::time::sleep(tokio::time::Duration::from_secs(3)) => {}
+            _ = shutdown.changed() => {
+                log::info!("Tmux scanner shutting down");
+                break;
+            }
+        }
     }
 }

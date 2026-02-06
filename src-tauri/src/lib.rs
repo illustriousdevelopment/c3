@@ -10,10 +10,18 @@ use std::fs;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
-use tauri::{AppHandle, Emitter, Manager};
+use tauri::{AppHandle, Emitter, Manager, RunEvent, WindowEvent};
+use tauri::menu::{MenuBuilder, MenuItemBuilder};
+use tauri::tray::TrayIconBuilder;
 use tokio::net::{TcpListener, TcpStream};
-use tokio::sync::broadcast;
+use tokio::sync::{broadcast, watch};
 use tokio_tungstenite::tungstenite::Message;
+
+const HOOK_SERVER_PORT: u16 = 9398;
+const WS_SERVER_PORT: u16 = 7777;
+
+// Wrapper so we can store the shutdown sender in Tauri state
+struct ShutdownHandle(std::sync::Mutex<Option<watch::Sender<bool>>>);
 
 // Known terminal apps (in preference order for auto-detection)
 const KNOWN_TERMINALS: &[&str] = &[
@@ -282,6 +290,8 @@ pub struct AppState {
     pub hook_timestamps: RwLock<HashMap<String, std::time::Instant>>,
     /// Tracks when a Stop hook fired for a session (to suppress Notification that follows)
     pub stop_timestamps: RwLock<HashMap<String, std::time::Instant>>,
+    /// Tracks when we last sent a notification per session (to debounce rapid-fire events)
+    pub notification_timestamps: RwLock<HashMap<String, std::time::Instant>>,
     /// Recent hook events for debugging
     pub hook_events: RwLock<Vec<HookEvent>>,
 }
@@ -298,6 +308,7 @@ impl AppState {
             tx,
             hook_timestamps: RwLock::new(HashMap::new()),
             stop_timestamps: RwLock::new(HashMap::new()),
+            notification_timestamps: RwLock::new(HashMap::new()),
             hook_events: RwLock::new(Vec::new()),
         }
     }
@@ -685,7 +696,19 @@ fn setup_hooks(app_handle: AppHandle) -> SetupResult {
         };
     }
 
-    // Step 3: Back up existing settings
+    // Step 3: Copy icon to config directory for terminal-notifier
+    let config_dir = PathBuf::from(&home).join(".config/c3");
+    let _ = fs::create_dir_all(&config_dir);
+    let icon_source = app_handle.path().resource_dir()
+        .ok()
+        .map(|d| d.join("resources").join("icon.png"))
+        .filter(|p| p.exists());
+    if let Some(icon_src) = icon_source {
+        let icon_dest = config_dir.join("icon.png");
+        let _ = fs::copy(&icon_src, &icon_dest);
+    }
+
+    // Step 4: Back up existing settings
     let claude_dir = PathBuf::from(&home).join(".claude");
     let settings_file = claude_dir.join("settings.json");
     let mut backup_path_str: Option<String> = None;
@@ -734,10 +757,10 @@ fn setup_hooks(app_handle: AppHandle) -> SetupResult {
                 "hooks": [{ "type": "command", "command": "$HOME/.local/bin/c3-hook.sh Notification" }]
             }
         ],
-        "PreToolUse": [
+        "PermissionRequest": [
             {
                 "matcher": "",
-                "hooks": [{ "type": "command", "command": "$HOME/.local/bin/c3-hook.sh PreToolUse" }]
+                "hooks": [{ "type": "command", "command": "$HOME/.local/bin/c3-hook.sh PermissionRequest" }]
             }
         ],
         "SessionStart": [
@@ -951,6 +974,13 @@ fn send_os_notification(
         cmd.arg("-sound").arg(sound);
     }
 
+    // Use C3 icon if available
+    let home = std::env::var("HOME").unwrap_or_default();
+    let icon_path = PathBuf::from(&home).join(".config/c3/icon.png");
+    if icon_path.exists() {
+        cmd.arg("-appIcon").arg(icon_path.to_string_lossy().as_ref());
+    }
+
     // If we have tmux context, set up click-to-focus
     if let Some(tmux_ctx) = tmux {
         if !tmux_ctx.session.is_empty() && !tmux_ctx.window.is_empty() {
@@ -1141,7 +1171,7 @@ async fn handle_hook_request(
     // Determine new state and notification info
     let hook_info: Option<(SessionState, &str, &str, &str)> = match notification.hook_type.as_str()
     {
-        "PermissionRequest" | "PreToolUse" => Some((
+        "PermissionRequest" => Some((
             SessionState::AwaitingPermission,
             "Claude needs permission to continue",
             "Permission Required",
@@ -1317,8 +1347,28 @@ async fn handle_hook_request(
         notif_subtitle.to_string()
     };
 
+    // Debounce notifications per session — suppress if <1s since last notification for this session
+    let should_notify = if let Some(ref sid) = session_id {
+        let mut timestamps = state.notification_timestamps.write();
+        let now = std::time::Instant::now();
+        if let Some(last) = timestamps.get(sid) {
+            if now.duration_since(*last).as_millis() < 1000 {
+                log::info!("Suppressing notification for {} — debounce (<1s)", sid);
+                false
+            } else {
+                timestamps.insert(sid.clone(), now);
+                true
+            }
+        } else {
+            timestamps.insert(sid.clone(), now);
+            true
+        }
+    } else {
+        true
+    };
+
     // Send OS notification if enabled and this hook type warrants one
-    if settings.notifications_enabled && !notif_message.is_empty() {
+    if should_notify && settings.notifications_enabled && !notif_message.is_empty() {
         // Determine the sound config and sound name for this event type
         let sound_config = match sound_type {
             "permission" => &settings.permission_sound,
@@ -1371,43 +1421,73 @@ async fn handle_hook_request(
 }
 
 // Start HTTP hook server
-async fn start_hook_server(state: Arc<AppState>, app_handle: AppHandle) {
-    let addr = "127.0.0.1:9398";
-    let listener = match TcpListener::bind(addr).await {
+async fn start_hook_server(
+    state: Arc<AppState>,
+    app_handle: AppHandle,
+    mut shutdown: watch::Receiver<bool>,
+) {
+    let addr = format!("127.0.0.1:{}", HOOK_SERVER_PORT);
+    let listener = match TcpListener::bind(&addr).await {
         Ok(l) => l,
         Err(e) => {
-            log::error!("Failed to bind hook server: {}", e);
+            log::error!("Failed to bind hook server on {}: {} — is another C3 instance running?", addr, e);
             return;
         }
     };
 
     log::info!("C3 hook server listening on http://{}", addr);
 
-    while let Ok((stream, _)) = listener.accept().await {
-        let state = state.clone();
-        let app_handle = app_handle.clone();
-        tokio::spawn(handle_hook_request(stream, state, app_handle));
+    loop {
+        tokio::select! {
+            result = listener.accept() => {
+                if let Ok((stream, _)) = result {
+                    let state = state.clone();
+                    let app_handle = app_handle.clone();
+                    tokio::spawn(handle_hook_request(stream, state, app_handle));
+                }
+            }
+            _ = shutdown.changed() => {
+                log::info!("Hook server shutting down");
+                break;
+            }
+        }
     }
+    // listener is dropped here, port is released
 }
 
 // Start WebSocket server
-async fn start_websocket_server(state: Arc<AppState>, app_handle: AppHandle) {
-    let addr = "127.0.0.1:7777";
-    let listener = match TcpListener::bind(addr).await {
+async fn start_websocket_server(
+    state: Arc<AppState>,
+    app_handle: AppHandle,
+    mut shutdown: watch::Receiver<bool>,
+) {
+    let addr = format!("127.0.0.1:{}", WS_SERVER_PORT);
+    let listener = match TcpListener::bind(&addr).await {
         Ok(l) => l,
         Err(e) => {
-            log::error!("Failed to bind WebSocket server: {}", e);
+            log::error!("Failed to bind WebSocket server on {}: {} — is another C3 instance running?", addr, e);
             return;
         }
     };
 
     log::info!("C3 WebSocket server listening on ws://{}", addr);
 
-    while let Ok((stream, addr)) = listener.accept().await {
-        let state = state.clone();
-        let app_handle = app_handle.clone();
-        tokio::spawn(handle_connection(stream, addr, state, app_handle));
+    loop {
+        tokio::select! {
+            result = listener.accept() => {
+                if let Ok((stream, remote_addr)) = result {
+                    let state = state.clone();
+                    let app_handle = app_handle.clone();
+                    tokio::spawn(handle_connection(stream, remote_addr, state, app_handle));
+                }
+            }
+            _ = shutdown.changed() => {
+                log::info!("WebSocket server shutting down");
+                break;
+            }
+        }
     }
+    // listener is dropped here, port is released
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -1442,7 +1522,47 @@ pub fn run() {
             plugins::mac_rounded_corners::enable_modern_window_style,
             plugins::mac_rounded_corners::reposition_traffic_lights
         ])
+        .on_window_event(|window, event| {
+            // Hide window instead of closing — keep running in tray
+            if let WindowEvent::CloseRequested { api, .. } = event {
+                window.hide().unwrap_or_default();
+                api.prevent_close();
+            }
+        })
         .setup(move |app| {
+            let (shutdown_tx, shutdown_rx) = watch::channel(false);
+
+            // Store the shutdown sender so we can trigger it on exit
+            app.manage(ShutdownHandle(std::sync::Mutex::new(Some(shutdown_tx))));
+
+            // Build system tray
+            let show = MenuItemBuilder::with_id("show", "Show C3").build(app)?;
+            let quit = MenuItemBuilder::with_id("quit", "Quit").build(app)?;
+            let tray_menu = MenuBuilder::new(app)
+                .item(&show)
+                .separator()
+                .item(&quit)
+                .build()?;
+
+            let _tray = TrayIconBuilder::new()
+                .menu(&tray_menu)
+                .menu_on_left_click(true)
+                .on_menu_event(|app, event| {
+                    match event.id().as_ref() {
+                        "show" => {
+                            if let Some(window) = app.get_webview_window("main") {
+                                let _ = window.show();
+                                let _ = window.set_focus();
+                            }
+                        }
+                        "quit" => {
+                            app.exit(0);
+                        }
+                        _ => {}
+                    }
+                })
+                .build(app)?;
+
             let state_ws = state.clone();
             let state_hook = state.clone();
             let state_tmux = state.clone();
@@ -1451,22 +1571,35 @@ pub fn run() {
             let app_handle_tmux = app.handle().clone();
 
             // Start WebSocket server in background
+            let shutdown_ws = shutdown_rx.clone();
             tauri::async_runtime::spawn(async move {
-                start_websocket_server(state_ws, app_handle_ws).await;
+                start_websocket_server(state_ws, app_handle_ws, shutdown_ws).await;
             });
 
             // Start HTTP hook server in background
+            let shutdown_hook = shutdown_rx.clone();
             tauri::async_runtime::spawn(async move {
-                start_hook_server(state_hook, app_handle_hook).await;
+                start_hook_server(state_hook, app_handle_hook, shutdown_hook).await;
             });
 
             // Start tmux scanner in background (fallback, lower frequency)
+            let shutdown_tmux = shutdown_rx.clone();
             tauri::async_runtime::spawn(async move {
-                tmux_scanner::start_tmux_scanner(state_tmux, app_handle_tmux).await;
+                tmux_scanner::start_tmux_scanner(state_tmux, app_handle_tmux, shutdown_tmux).await;
             });
 
             Ok(())
         })
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|app_handle, event| {
+            if let RunEvent::Exit = event {
+                log::info!("App exiting, shutting down servers...");
+                if let Some(handle) = app_handle.try_state::<ShutdownHandle>() {
+                    if let Ok(mut guard) = handle.0.lock() {
+                        let _ = guard.take();
+                    }
+                }
+            }
+        });
 }

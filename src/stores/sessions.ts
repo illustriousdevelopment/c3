@@ -1,11 +1,6 @@
 import { create } from 'zustand';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
-import {
-  isPermissionGranted,
-  requestPermission,
-  sendNotification,
-} from '@tauri-apps/plugin-notification';
 import type { C3Session, SessionMeta, SessionMetaStore, AppSettings, SoundConfig } from '../types';
 
 interface SessionStore {
@@ -65,7 +60,8 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
     const prevState = prevSession?.state || previousStates[session.id];
 
     // Check for state transitions that trigger notifications
-    if (state.notificationsEnabled) {
+    // Only notify on actual transitions — skip if there's no previous state (initial discovery)
+    if (state.notificationsEnabled && prevState) {
       if (session.state === 'awaiting_permission' && prevState !== 'awaiting_permission') {
         triggerNotification(session, 'permission');
       } else if (session.state === 'awaiting_input' && prevState !== 'awaiting_input') {
@@ -228,52 +224,18 @@ async function playSound(config: SoundConfig) {
   }
 }
 
-// Notification helper
-async function triggerNotification(session: C3Session, type: 'permission' | 'input' | 'complete') {
+// Play the appropriate sound for a state transition.
+// Desktop notifications are handled by the Rust backend via terminal-notifier
+// (which supports click-to-focus on the tmux pane).
+async function triggerNotification(_session: C3Session, type: 'permission' | 'input' | 'complete') {
   try {
-    // Load settings to get sound config
     const settings = await invoke<AppSettings>('get_settings');
-
-    // Get the right sound config
-    let soundConfig: SoundConfig;
-    let title: string;
-    let body: string;
-
-    switch (type) {
-      case 'permission':
-        soundConfig = settings.permission_sound;
-        title = `Permission Requested: ${session.projectName}`;
-        body = `${session.pendingAction?.tool || 'Action'} requires approval`;
-        break;
-      case 'input':
-        soundConfig = settings.input_sound;
-        title = `Input Needed: ${session.projectName}`;
-        body = session.pendingAction?.description || 'Awaiting your input';
-        break;
-      case 'complete':
-        soundConfig = settings.complete_sound;
-        title = `Task Complete: ${session.projectName}`;
-        body = 'Session has finished';
-        break;
-    }
-
-    // Play sound
+    const soundConfig = type === 'permission' ? settings.permission_sound
+      : type === 'input' ? settings.input_sound
+      : settings.complete_sound;
     playSound(soundConfig);
-
-    // Send notification if enabled
-    if (settings.notifications_enabled) {
-      let hasPermission = await isPermissionGranted();
-      if (!hasPermission) {
-        const permission = await requestPermission();
-        hasPermission = permission === 'granted';
-      }
-
-      if (hasPermission) {
-        sendNotification({ title, body });
-      }
-    }
   } catch (e) {
-    console.error('[C3] Failed to send notification:', e);
+    console.error('[C3] Failed to play notification sound:', e);
   }
 }
 

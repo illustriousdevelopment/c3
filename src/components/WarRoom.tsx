@@ -100,10 +100,13 @@ export function WarRoom() {
         <PinnedLane sessions={pinnedSessions} />
       )}
 
-      {/* Regular Lanes */}
-      {activeFilter !== 'pinned' && lanesToShow.map((lane) => (
-        <Lane key={lane.id} lane={lane} sessions={filteredSessions} />
-      ))}
+      {/* Regular Lanes — exclude pinned sessions to avoid duplication */}
+      {activeFilter !== 'pinned' && lanesToShow.map((lane) => {
+        const laneSessions = (activeFilter === 'all')
+          ? filteredSessions.filter((s) => !sessionMeta[s.id]?.pinned)
+          : filteredSessions;
+        return <Lane key={lane.id} lane={lane} sessions={laneSessions} />;
+      })}
 
       {/* No results message when filtering */}
       {filteredSessions.length === 0 && activeFilter !== 'all' && (
