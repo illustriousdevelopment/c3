@@ -37,10 +37,8 @@
       "icons/icon.ico"
     ],
     "resources": ["resources/c3-hook.sh"],
-    "macOS": {
-      "signingIdentity": null,
-      "entitlements": null
-    }
+    "macOS": {}
+
   },
   "plugins": {
     "shell": {

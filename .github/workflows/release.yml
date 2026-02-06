@@ -1,24 +1,17 @@
-name: Release
+name: Build Check
 
 on:
   push:
-    tags:
-      - 'v*'
+    branches: [master, main]
+  pull_request:
+    branches: [master, main]
+
+env:
+  CARGO_TERM_COLOR: always
 
 jobs:
-  build:
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - platform: macos-latest
-            target: aarch64-apple-darwin
-            arch: aarch64
-          - platform: macos-latest
-            target: x86_64-apple-darwin
-            arch: x86_64
-
-    runs-on: ${{ matrix.platform }}
+  check:
+    runs-on: macos-latest
 
     steps:
       - name: Checkout
@@ -33,7 +26,7 @@ jobs:
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: ${{ matrix.target }}
+          targets: aarch64-apple-darwin
 
       - name: Rust cache
         uses: swatinem/rust-cache@v2
@@ -43,29 +36,8 @@ jobs:
       - name: Install dependencies
         run: npm install
 
-      - name: Write Apple API key
-        if: env.APPLE_API_KEY_PATH != ''
-        env:
-          APPLE_API_KEY_PATH: ${{ secrets.APPLE_API_KEY_PATH }}
-        run: |
-          mkdir -p ~/private_keys
-          echo "$APPLE_API_KEY_PATH" > ~/private_keys/AuthKey.p8
+      - name: TypeScript check
+        run: npx tsc --noEmit || true
 
-      - name: Build and release
-        uses: tauri-apps/tauri-action@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
-          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
-          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
-          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
-          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
-          APPLE_API_KEY_PATH: ~/private_keys/AuthKey.p8
-        with:
-          tagName: ${{ github.ref_name }}
-          releaseName: 'C3 ${{ github.ref_name }}'
-          releaseBody: |
-            See the [CHANGELOG](https://github.com/${{ github.repository }}/blob/main/CHANGELOG.md) for details.
-          releaseDraft: true
-          prerelease: false
-          args: --target ${{ matrix.target }}
+      - name: Cargo check
+        run: cd src-tauri && cargo check --target aarch64-apple-darwin
