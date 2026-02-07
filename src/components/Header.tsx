@@ -103,7 +103,7 @@ export function Header({ onSearchClick, onSettingsClick }: HeaderProps) {
 
         <button
           className={`header-icon-btn connection-indicator ${isConnected ? 'connected' : 'disconnected'}`}
-          title={isConnected ? 'WebSocket connected' : 'WebSocket disconnected'}
+          title={isConnected ? 'Connected' : 'Disconnected'}
           style={{ cursor: 'default' }}
         >
           <Plug size={14} />

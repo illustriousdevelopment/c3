@@ -4,7 +4,7 @@ use std::collections::HashSet;
 use std::fs;
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use crate::cmd;
 use std::sync::Arc;
 use std::time::SystemTime;
 use tauri::{AppHandle, Emitter};
@@ -29,7 +29,7 @@ struct ConversationState {
 
 /// Scan tmux for all panes running Claude
 fn find_claude_panes() -> Vec<ClaudePane> {
-    let output = Command::new("tmux")
+    let output = cmd("tmux")
         .args([
             "list-panes",
             "-a",
@@ -85,7 +85,7 @@ fn find_claude_panes() -> Vec<ClaudePane> {
 /// Check if any child process of the given PID is claude
 fn is_child_claude(pane_pid: &str) -> bool {
     // pgrep for claude as a child of the pane process
-    Command::new("pgrep")
+    cmd("pgrep")
         .args(["-P", pane_pid, "-f", "claude"])
         .output()
         .map(|o| o.status.success())

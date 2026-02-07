@@ -2,26 +2,49 @@ mod tmux_scanner;
 mod plugins;
 
 use chrono::{DateTime, Utc};
-use futures_util::{SinkExt, StreamExt};
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
-use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
+
 use tauri::{AppHandle, Emitter, Manager, RunEvent, WindowEvent};
 use tauri::menu::{MenuBuilder, MenuItemBuilder};
 use tauri::tray::TrayIconBuilder;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{broadcast, watch};
-use tokio_tungstenite::tungstenite::Message;
 
 const HOOK_SERVER_PORT: u16 = 9398;
-const WS_SERVER_PORT: u16 = 7777;
 
 // Wrapper so we can store the shutdown sender in Tauri state
 struct ShutdownHandle(std::sync::Mutex<Option<watch::Sender<bool>>>);
+
+/// Build the full PATH including Homebrew and common tool locations.
+/// macOS GUI apps launched from Finder/Dock get a minimal PATH that
+/// doesn't include /opt/homebrew/bin, /usr/local/bin, ~/.local/bin, etc.
+fn full_path() -> String {
+    let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
+    let extra_dirs = [
+        format!("{home}/.local/bin"),
+        "/opt/homebrew/bin".to_string(),
+        "/opt/homebrew/sbin".to_string(),
+        "/usr/local/bin".to_string(),
+        "/usr/local/sbin".to_string(),
+    ];
+    let existing = std::env::var("PATH").unwrap_or_default();
+    let mut parts: Vec<&str> = extra_dirs.iter().map(|s| s.as_str()).collect();
+    parts.extend(existing.split(':'));
+    parts.join(":")
+}
+
+/// Create a Command with the full PATH set so that tmux, jq,
+/// terminal-notifier, etc. are found even when launched from Finder.
+pub(crate) fn cmd(program: &str) -> std::process::Command {
+    let mut c = std::process::Command::new(program);
+    c.env("PATH", full_path());
+    c
+}
 
 // Known terminal apps (in preference order for auto-detection)
 const KNOWN_TERMINALS: &[&str] = &[
@@ -164,7 +187,7 @@ fn save_settings(settings: &AppSettings) -> Result<(), String> {
 fn detect_terminal() -> Option<String> {
     for &term in KNOWN_TERMINALS {
         // Check if app is running
-        let check = std::process::Command::new("pgrep")
+        let check = cmd("pgrep")
             .args(["-x", term])
             .output();
 
@@ -413,7 +436,7 @@ async fn focus_terminal(tmux_target: String) -> Result<(), String> {
 
     // Activate terminal using osascript
     let activate_script = format!("tell application \"{}\" to activate", terminal);
-    let activate_result = std::process::Command::new("osascript")
+    let activate_result = cmd("osascript")
         .args(["-e", &activate_script])
         .output();
 
@@ -425,7 +448,7 @@ async fn focus_terminal(tmux_target: String) -> Result<(), String> {
     tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
 
     // Select tmux window
-    let window_result = std::process::Command::new("tmux")
+    let window_result = cmd("tmux")
         .args(["select-window", "-t", &format!("{}:{}", session, window)])
         .output();
 
@@ -434,7 +457,7 @@ async fn focus_terminal(tmux_target: String) -> Result<(), String> {
     }
 
     // Select tmux pane
-    let pane_result = std::process::Command::new("tmux")
+    let pane_result = cmd("tmux")
         .args([
             "select-pane",
             "-t",
@@ -498,7 +521,7 @@ fn update_session_meta(session_id: String, tag: Option<String>, pinned: Option<b
 #[tauri::command]
 async fn create_new_task() -> Result<String, String> {
     // Find the first attached tmux session to create the window in
-    let list_output = std::process::Command::new("tmux")
+    let list_output = cmd("tmux")
         .args(["list-sessions", "-F", "#{session_name}:#{session_attached}"])
         .output()
         .map_err(|e| format!("Failed to list tmux sessions: {}", e))?;
@@ -512,7 +535,7 @@ async fn create_new_task() -> Result<String, String> {
         .to_string();
 
     // Create a new window in the attached session
-    let create_window = std::process::Command::new("tmux")
+    let create_window = cmd("tmux")
         .args(["new-window", "-t", &session_name, "-P", "-F", "#{session_name}:#{window_index}.#{pane_index}"])
         .output()
         .map_err(|e| format!("Failed to create window: {}", e))?;
@@ -527,7 +550,7 @@ async fn create_new_task() -> Result<String, String> {
         .to_string();
 
     // Start claude in the new window
-    let _ = std::process::Command::new("tmux")
+    let _ = cmd("tmux")
         .args(["send-keys", "-t", &target, "claude", "Enter"])
         .output();
 
@@ -552,7 +575,7 @@ async fn play_sound(sound: String) -> Result<(), String> {
     }
 
     // Play using afplay (macOS command-line audio player)
-    let result = std::process::Command::new("afplay")
+    let result = cmd("afplay")
         .arg(&sound_file)
         .spawn();
 
@@ -608,19 +631,19 @@ fn check_hook_status(app_handle: AppHandle) -> HookStatus {
     };
 
     // Check dependencies
-    let jq_installed = std::process::Command::new("which")
+    let jq_installed = cmd("which")
         .arg("jq")
         .output()
         .map(|o| o.status.success())
         .unwrap_or(false);
 
-    let terminal_notifier_installed = std::process::Command::new("which")
+    let terminal_notifier_installed = cmd("which")
         .arg("terminal-notifier")
         .output()
         .map(|o| o.status.success())
         .unwrap_or(false);
 
-    let tmux_installed = std::process::Command::new("which")
+    let tmux_installed = cmd("which")
         .arg("tmux")
         .output()
         .map(|o| o.status.success())
@@ -825,7 +848,7 @@ async fn close_pane(
     tmux_target: String,
 ) -> Result<(), String> {
     // Kill the tmux pane
-    let result = std::process::Command::new("tmux")
+    let result = cmd("tmux")
         .args(["kill-pane", "-t", &tmux_target])
         .output();
 
@@ -846,86 +869,6 @@ async fn close_pane(
 }
 
 // WebSocket connection handler
-async fn handle_connection(
-    stream: TcpStream,
-    addr: SocketAddr,
-    state: Arc<AppState>,
-    app_handle: AppHandle,
-) {
-    log::info!("New WebSocket connection from: {}", addr);
-
-    let ws_stream = match tokio_tungstenite::accept_async(stream).await {
-        Ok(ws) => ws,
-        Err(e) => {
-            log::error!("WebSocket handshake failed: {}", e);
-            return;
-        }
-    };
-
-    let (mut write, mut read) = ws_stream.split();
-    let mut rx = state.tx.subscribe();
-
-    // Spawn task to forward broadcast messages to this client
-    let write_task = tokio::spawn(async move {
-        while let Ok(msg) = rx.recv().await {
-            if write.send(Message::Text(msg.into())).await.is_err() {
-                break;
-            }
-        }
-    });
-
-    // Handle incoming messages
-    while let Some(msg) = read.next().await {
-        match msg {
-            Ok(Message::Text(text)) => {
-                if let Ok(client_msg) = serde_json::from_str::<ClientMessage>(&text) {
-                    match client_msg {
-                        ClientMessage::Register { session } => {
-                            log::info!("Session registered: {} ({})", session.id, session.project_name);
-                            let session_clone = session.clone();
-                            state.sessions.write().insert(session.id.clone(), session);
-                            let _ = app_handle.emit("session-update", session_clone);
-                        }
-                        ClientMessage::StateChange {
-                            session_id,
-                            state: new_state,
-                            pending_action,
-                        } => {
-                            if let Some(session) = state.sessions.write().get_mut(&session_id) {
-                                session.state = new_state;
-                                session.pending_action = pending_action;
-                                session.last_activity = Utc::now();
-                                let session_clone = session.clone();
-                                let _ = app_handle.emit("session-update", session_clone);
-                            }
-                        }
-                        ClientMessage::Heartbeat { session_id } => {
-                            if let Some(session) = state.sessions.write().get_mut(&session_id) {
-                                session.last_activity = Utc::now();
-                            }
-                        }
-                        ClientMessage::Disconnect { session_id } => {
-                            log::info!("Session disconnected: {}", session_id);
-                            state.sessions.write().remove(&session_id);
-                            let _ = app_handle.emit("session-removed", session_id);
-                        }
-                    }
-                }
-            }
-            Ok(Message::Close(_)) => {
-                log::info!("WebSocket connection closed: {}", addr);
-                break;
-            }
-            Err(e) => {
-                log::error!("WebSocket error: {}", e);
-                break;
-            }
-            _ => {}
-        }
-    }
-
-    write_task.abort();
-}
 
 // Tmux context from hook
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -965,20 +908,20 @@ fn send_os_notification(
     sound: &str,
     tmux: &Option<TmuxContext>,
 ) {
-    let mut cmd = std::process::Command::new("terminal-notifier");
-    cmd.arg("-message").arg(message)
+    let mut notifier = cmd("terminal-notifier");
+    notifier.arg("-message").arg(message)
        .arg("-title").arg(title)
        .arg("-subtitle").arg(subtitle);
 
     if !sound.is_empty() && !sound.starts_with('/') {
-        cmd.arg("-sound").arg(sound);
+        notifier.arg("-sound").arg(sound);
     }
 
     // Use C3 icon if available
     let home = std::env::var("HOME").unwrap_or_default();
     let icon_path = PathBuf::from(&home).join(".config/c3/icon.png");
     if icon_path.exists() {
-        cmd.arg("-appIcon").arg(icon_path.to_string_lossy().as_ref());
+        notifier.arg("-appIcon").arg(icon_path.to_string_lossy().as_ref());
     }
 
     // If we have tmux context, set up click-to-focus
@@ -989,13 +932,13 @@ fn send_os_notification(
                 "{home}/.claude/hooks/switch-tmux-pane.sh '{}' '{}' '{}'",
                 tmux_ctx.session, tmux_ctx.window, tmux_ctx.pane
             );
-            cmd.arg("-execute").arg(&switch_script);
+            notifier.arg("-execute").arg(&switch_script);
         }
     } else {
-        cmd.arg("-activate").arg("com.mitchellh.ghostty");
+        notifier.arg("-activate").arg("com.mitchellh.ghostty");
     }
 
-    if let Err(e) = cmd.spawn() {
+    if let Err(e) = notifier.spawn() {
         log::error!("Failed to send notification: {}", e);
     }
 }
@@ -1009,7 +952,7 @@ fn play_sound_file(sound: &str) {
     };
 
     if std::path::Path::new(&sound_file).exists() {
-        let _ = std::process::Command::new("afplay")
+        let _ = cmd("afplay")
             .arg(&sound_file)
             .spawn();
     }
@@ -1455,41 +1398,6 @@ async fn start_hook_server(
     // listener is dropped here, port is released
 }
 
-// Start WebSocket server
-async fn start_websocket_server(
-    state: Arc<AppState>,
-    app_handle: AppHandle,
-    mut shutdown: watch::Receiver<bool>,
-) {
-    let addr = format!("127.0.0.1:{}", WS_SERVER_PORT);
-    let listener = match TcpListener::bind(&addr).await {
-        Ok(l) => l,
-        Err(e) => {
-            log::error!("Failed to bind WebSocket server on {}: {} — is another C3 instance running?", addr, e);
-            return;
-        }
-    };
-
-    log::info!("C3 WebSocket server listening on ws://{}", addr);
-
-    loop {
-        tokio::select! {
-            result = listener.accept() => {
-                if let Ok((stream, remote_addr)) = result {
-                    let state = state.clone();
-                    let app_handle = app_handle.clone();
-                    tokio::spawn(handle_connection(stream, remote_addr, state, app_handle));
-                }
-            }
-            _ = shutdown.changed() => {
-                log::info!("WebSocket server shutting down");
-                break;
-            }
-        }
-    }
-    // listener is dropped here, port is released
-}
-
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
@@ -1563,18 +1471,10 @@ pub fn run() {
                 })
                 .build(app)?;
 
-            let state_ws = state.clone();
             let state_hook = state.clone();
             let state_tmux = state.clone();
-            let app_handle_ws = app.handle().clone();
             let app_handle_hook = app.handle().clone();
             let app_handle_tmux = app.handle().clone();
-
-            // Start WebSocket server in background
-            let shutdown_ws = shutdown_rx.clone();
-            tauri::async_runtime::spawn(async move {
-                start_websocket_server(state_ws, app_handle_ws, shutdown_ws).await;
-            });
 
             // Start HTTP hook server in background
             let shutdown_hook = shutdown_rx.clone();
