@@ -917,12 +917,8 @@ fn send_os_notification(
         notifier.arg("-sound").arg(sound);
     }
 
-    // Use C3 icon if available
-    let home = std::env::var("HOME").unwrap_or_default();
-    let icon_path = PathBuf::from(&home).join(".config/c3/icon.png");
-    if icon_path.exists() {
-        notifier.arg("-appIcon").arg(icon_path.to_string_lossy().as_ref());
-    }
+    // Use C3's app icon via sender bundle ID (more reliable than -appIcon)
+    notifier.arg("-sender").arg("com.jonpatterson.c3");
 
     // If we have tmux context, set up click-to-focus
     if let Some(tmux_ctx) = tmux {
