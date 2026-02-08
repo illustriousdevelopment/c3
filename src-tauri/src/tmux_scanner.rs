@@ -40,7 +40,15 @@ fn find_claude_panes() -> Vec<ClaudePane> {
 
     let output = match output {
         Ok(o) if o.status.success() => o,
-        _ => return vec![],
+        Ok(o) => {
+            let stderr = String::from_utf8_lossy(&o.stderr);
+            log::error!("tmux list-panes failed (status {:?}): {}", o.status.code(), stderr);
+            return vec![];
+        }
+        Err(e) => {
+            log::error!("tmux command failed to execute: {}", e);
+            return vec![];
+        }
     };
 
     let stdout = String::from_utf8_lossy(&output.stdout);

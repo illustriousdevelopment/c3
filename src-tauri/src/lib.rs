@@ -43,6 +43,7 @@ fn full_path() -> String {
 pub(crate) fn cmd(program: &str) -> std::process::Command {
     let mut c = std::process::Command::new(program);
     c.env("PATH", full_path());
+    c.env("LANG", "en_US.UTF-8");
     c
 }
 
