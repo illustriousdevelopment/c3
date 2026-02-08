@@ -1,6 +1,6 @@
 [package]
 name = "c3"
-version = "0.2.2"
+version = "0.2.3"
 description = "Claude Command Center - Visual session manager"
 authors = ["jonpatterson"]
 edition = "2021"
