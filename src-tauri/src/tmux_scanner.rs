@@ -68,10 +68,12 @@ fn find_claude_panes() -> Vec<ClaudePane> {
         let window_name = parts[5];
 
         // Detect Claude sessions:
-        // 1. pane_current_command is "node" and child is claude
-        // 2. pane_current_command contains "claude"
+        // 1. pane_current_command contains "claude"
+        // 2. pane_current_command is "node" and child is claude
+        // 3. pane_current_command is a versioned Claude binary (e.g. "2.1.37")
         let is_active_claude = pane_command.contains("claude")
-            || (pane_command == "node" && is_child_claude(pane_pid));
+            || (pane_command == "node" && is_child_claude(pane_pid))
+            || is_claude_version_binary(pane_command);
 
         // Also detect completed Claude sessions (back to shell but title has marker)
         let has_claude_title = pane_title.contains('✳') || pane_title.contains("Claude");
@@ -98,6 +100,18 @@ fn is_child_claude(pane_pid: &str) -> bool {
         .output()
         .map(|o| o.status.success())
         .unwrap_or(false)
+}
+
+/// Check if the command name is a versioned Claude Code binary.
+/// Claude Code installs to ~/.local/share/claude/versions/<version>,
+/// and tmux reports pane_current_command as the binary name (e.g. "2.1.37").
+fn is_claude_version_binary(command: &str) -> bool {
+    if let Some(home) = dirs_next() {
+        let version_path = home.join(".local/share/claude/versions").join(command);
+        version_path.exists()
+    } else {
+        false
+    }
 }
 
 /// Convert a cwd to the Claude projects directory path
