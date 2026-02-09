@@ -55,23 +55,8 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
   },
 
   updateSession: (session) => {
-    const state = get();
-    const prevSession = state.sessions[session.id];
-    const prevState = prevSession?.state || previousStates[session.id];
-
-    // Check for state transitions that trigger notifications
-    // Only notify on actual transitions — skip if there's no previous state (initial discovery)
-    if (state.notificationsEnabled && prevState) {
-      if (session.state === 'awaiting_permission' && prevState !== 'awaiting_permission') {
-        triggerNotification(session, 'permission');
-      } else if (session.state === 'awaiting_input' && prevState !== 'awaiting_input') {
-        triggerNotification(session, 'input');
-      } else if (session.state === 'complete' && prevState !== 'complete') {
-        triggerNotification(session, 'complete');
-      }
-    }
-
-    // Track previous state
+    // Sounds are triggered by the hook-sound event from the backend,
+    // not by state transitions (which can also come from the tmux scanner).
     previousStates[session.id] = session.state;
 
     set((state) => ({
@@ -224,12 +209,12 @@ async function playSound(config: SoundConfig) {
   }
 }
 
-// Play the appropriate sound for a state transition.
-// Desktop notifications are handled by the Rust backend via terminal-notifier
-// (which supports click-to-focus on the tmux pane).
-async function triggerNotification(_session: C3Session, type: 'permission' | 'input' | 'complete') {
+// Play the appropriate sound for a hook event type.
+// Desktop notifications are handled by the Rust backend via terminal-notifier.
+async function triggerSound(type: 'permission' | 'input' | 'complete') {
   try {
     const settings = await invoke<AppSettings>('get_settings');
+    if (!settings.notifications_enabled) return;
     const soundConfig = type === 'permission' ? settings.permission_sound
       : type === 'input' ? settings.input_sound
       : settings.complete_sound;
@@ -257,6 +242,13 @@ export async function initializeSessionListeners() {
     await listen<string>('session-removed', (event) => {
       console.log('[C3] Session removed:', event.payload);
       useSessionStore.getState().removeSession(event.payload);
+    });
+
+    // Listen for hook-triggered sounds (separate from state changes)
+    await listen<string>('hook-sound', (event) => {
+      const soundType = event.payload as 'permission' | 'input' | 'complete';
+      console.log('[C3] Hook sound:', soundType);
+      triggerSound(soundType);
     });
 
     console.log('[C3] Event listeners ready');

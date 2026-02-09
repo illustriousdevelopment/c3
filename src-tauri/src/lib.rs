@@ -906,7 +906,6 @@ fn send_os_notification(
     message: &str,
     title: &str,
     subtitle: &str,
-    sound: &str,
     tmux: &Option<TmuxContext>,
 ) {
     let mut notifier = cmd("terminal-notifier");
@@ -914,17 +913,17 @@ fn send_os_notification(
        .arg("-title").arg(title)
        .arg("-subtitle").arg(subtitle);
 
-    if !sound.is_empty() && !sound.starts_with('/') {
-        notifier.arg("-sound").arg(sound);
+    // Use C3's icon as content image (-appIcon is broken on modern macOS,
+    // -sender breaks -execute click handling, so -contentImage is the best option)
+    let home = std::env::var("HOME").unwrap_or_default();
+    let icon_path = format!("{home}/.config/c3/icon.png");
+    if std::path::Path::new(&icon_path).exists() {
+        notifier.arg("-contentImage").arg(&icon_path);
     }
-
-    // Use C3's app icon via sender bundle ID (more reliable than -appIcon)
-    notifier.arg("-sender").arg("com.jonpatterson.c3");
 
     // If we have tmux context, set up click-to-focus
     if let Some(tmux_ctx) = tmux {
         if !tmux_ctx.session.is_empty() && !tmux_ctx.window.is_empty() {
-            let home = std::env::var("HOME").unwrap_or_default();
             let switch_script = format!(
                 "{home}/.claude/hooks/switch-tmux-pane.sh '{}' '{}' '{}'",
                 tmux_ctx.session, tmux_ctx.window, tmux_ctx.pane
@@ -937,21 +936,6 @@ fn send_os_notification(
 
     if let Err(e) = notifier.spawn() {
         log::error!("Failed to send notification: {}", e);
-    }
-}
-
-/// Play a sound (system name or custom file path)
-fn play_sound_file(sound: &str) {
-    let sound_file = if sound.starts_with('/') {
-        sound.to_string()
-    } else {
-        format!("/System/Library/Sounds/{}.aiff", sound)
-    };
-
-    if std::path::Path::new(&sound_file).exists() {
-        let _ = cmd("afplay")
-            .arg(&sound_file)
-            .spawn();
     }
 }
 
@@ -1109,37 +1093,33 @@ async fn handle_hook_request(
     let settings = load_settings();
 
     // Determine new state and notification info
-    let hook_info: Option<(SessionState, &str, &str, &str)> = match notification.hook_type.as_str()
+    let hook_info: Option<(SessionState, &str, &str)> = match notification.hook_type.as_str()
     {
         "PermissionRequest" => Some((
             SessionState::AwaitingPermission,
             "Claude needs permission to continue",
             "Permission Required",
-            "permission",
         )),
         "Notification" => Some((
             SessionState::AwaitingInput,
             "Claude is waiting for your response",
             "Input Needed",
-            "input",
         )),
         "Stop" => Some((
             SessionState::Complete,
             "Claude has finished processing",
             "Task Complete",
-            "complete",
         )),
         "SessionStart" => Some((
             SessionState::Processing,
             "Session started",
             "Welcome Back",
-            "none",
         )),
-        "PostToolUse" => Some((SessionState::Processing, "", "", "none")),
+        "PostToolUse" => Some((SessionState::Processing, "", "")),
         _ => None,
     };
 
-    let (new_state, notif_message, notif_subtitle, sound_type) = match hook_info {
+    let (new_state, notif_message, notif_subtitle) = match hook_info {
         Some(info) => info,
         None => {
             let body = "unknown_hook";
@@ -1255,6 +1235,19 @@ async fn handle_hook_request(
                 state.stop_timestamps.write().insert(sid.clone(), std::time::Instant::now());
             }
             let _ = app_handle.emit("session-update", session_clone);
+
+            // Tell the frontend to play the appropriate sound for this hook event.
+            // This is separate from state-change sounds because the scanner may have
+            // already set the state (e.g. AwaitingInput) before the hook fires.
+            let sound_type = match notification.hook_type.as_str() {
+                "PermissionRequest" => Some("permission"),
+                "Notification" => Some("input"),
+                "Stop" => Some("complete"),
+                _ => None,
+            };
+            if let Some(st) = sound_type {
+                let _ = app_handle.emit("hook-sound", st);
+            }
         }
     } else {
         log::warn!("No session found for cwd: {}", notification.cwd);
@@ -1308,30 +1301,8 @@ async fn handle_hook_request(
     };
 
     // Send OS notification if enabled and this hook type warrants one
+    // Sounds are handled by the frontend via session-update events
     if should_notify && settings.notifications_enabled && !notif_message.is_empty() {
-        // Determine the sound config and sound name for this event type
-        let sound_config = match sound_type {
-            "permission" => &settings.permission_sound,
-            "input" => &settings.input_sound,
-            "complete" => &settings.complete_sound,
-            _ => &SoundConfig { enabled: false, sound: None },
-        };
-
-        // Get the sound name for the notification
-        let sound_name = if sound_config.enabled {
-            match &sound_config.sound {
-                Some(s) if s.starts_with('/') => {
-                    // Custom file - play via afplay, don't pass to terminal-notifier
-                    play_sound_file(s);
-                    String::new() // empty = no sound in notification
-                }
-                Some(s) => s.clone(), // System sound name
-                None => "Ping".to_string(), // Default
-            }
-        } else {
-            String::new() // No sound
-        };
-
         let title = if let Some(ref name) = project_name {
             format!("c3 — {}", name)
         } else {
@@ -1342,7 +1313,6 @@ async fn handle_hook_request(
             notif_message,
             &title,
             &subtitle,
-            &sound_name,
             &notification.tmux,
         );
     }
