@@ -80,8 +80,15 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
     set({ isConnected: connected });
   },
 
-  setNotificationsEnabled: (enabled) => {
+  setNotificationsEnabled: async (enabled) => {
     set({ notificationsEnabled: enabled });
+    // Persist to backend so the hook server also respects the toggle
+    try {
+      const settings = await invoke<AppSettings>('get_settings');
+      await invoke('update_settings', { settings: { ...settings, notifications_enabled: enabled } });
+    } catch (e) {
+      console.error('[C3] Failed to persist notifications_enabled:', e);
+    }
   },
 
   // Session metadata
@@ -213,6 +220,8 @@ async function playSound(config: SoundConfig) {
 // Desktop notifications are handled by the Rust backend via terminal-notifier.
 async function triggerSound(type: 'permission' | 'input' | 'complete') {
   try {
+    // Check the in-memory toggle first (bell button in header)
+    if (!useSessionStore.getState().notificationsEnabled) return;
     const settings = await invoke<AppSettings>('get_settings');
     if (!settings.notifications_enabled) return;
     const soundConfig = type === 'permission' ? settings.permission_sound
@@ -254,6 +263,14 @@ export async function initializeSessionListeners() {
     console.log('[C3] Event listeners ready');
   } catch (e) {
     console.error('[C3] Failed to set up listeners:', e);
+  }
+
+  // Initialize notifications toggle from saved settings
+  try {
+    const settings = await invoke<AppSettings>('get_settings');
+    useSessionStore.setState({ notificationsEnabled: settings.notifications_enabled });
+  } catch (e) {
+    console.error('[C3] Failed to load initial settings:', e);
   }
 
   // Initial fetch

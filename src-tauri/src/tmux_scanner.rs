@@ -102,16 +102,14 @@ fn is_child_claude(pane_pid: &str) -> bool {
         .unwrap_or(false)
 }
 
-/// Check if the command name is a versioned Claude Code binary.
-/// Claude Code installs to ~/.local/share/claude/versions/<version>,
+/// Check if the command name looks like a versioned Claude Code binary.
+/// Enterprise Claude Code installs to ~/.local/share/claude/versions/<version>,
 /// and tmux reports pane_current_command as the binary name (e.g. "2.1.37").
+/// Old versions get cleaned up, so we pattern-match instead of checking the file.
 fn is_claude_version_binary(command: &str) -> bool {
-    if let Some(home) = dirs_next() {
-        let version_path = home.join(".local/share/claude/versions").join(command);
-        version_path.exists()
-    } else {
-        false
-    }
+    // Match semver-like patterns: digits.digits.digits (e.g. "2.1.75")
+    let parts: Vec<&str> = command.split('.').collect();
+    parts.len() == 3 && parts.iter().all(|p| !p.is_empty() && p.chars().all(|c| c.is_ascii_digit()))
 }
 
 /// Convert a cwd to the Claude projects directory path

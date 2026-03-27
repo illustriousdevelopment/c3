@@ -535,9 +535,10 @@ async fn create_new_task() -> Result<String, String> {
         .unwrap_or("0")
         .to_string();
 
-    // Create a new window in the attached session
+    // Create a new window in the attached session, starting in the user's home directory
+    let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
     let create_window = cmd("tmux")
-        .args(["new-window", "-t", &session_name, "-P", "-F", "#{session_name}:#{window_index}.#{pane_index}"])
+        .args(["new-window", "-t", &session_name, "-c", &home, "-P", "-F", "#{session_name}:#{window_index}.#{pane_index}"])
         .output()
         .map_err(|e| format!("Failed to create window: {}", e))?;
 
