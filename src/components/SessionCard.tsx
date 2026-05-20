@@ -40,14 +40,32 @@ function truncatePath(path: string, maxLength: number = 40): string {
 function getStateLabel(state: string): string {
   switch (state) {
     case 'awaiting_permission':
-      return 'Permission';
+      return '!';
+    case 'awaiting_input':
+      return '○';
+    case 'processing':
+    case 'spawning':
+      return '↻';
+    case 'complete':
+      return '✓';
+    case 'error':
+      return '×';
+    default:
+      return state;
+  }
+}
+
+function getStateTitle(state: string): string {
+  switch (state) {
+    case 'awaiting_permission':
+      return 'Permission required';
     case 'awaiting_input':
       return 'Idle';
     case 'processing':
     case 'spawning':
       return 'Working';
     case 'complete':
-      return '✓';
+      return 'Complete';
     case 'error':
       return 'Error';
     default:
@@ -215,7 +233,7 @@ export function SessionCard({ session, shortcut }: SessionCardProps) {
             <span
               className={`session-state-badge state-${session.state}`}
               style={{ borderColor: color, color: color }}
-              title={session.state === 'complete' ? 'Complete' : undefined}
+              title={getStateTitle(session.state)}
             >
               {getStateLabel(session.state)}
             </span>

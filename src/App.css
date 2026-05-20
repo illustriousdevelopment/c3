@@ -569,11 +569,14 @@ body {
 }
 
 .session-state-badge {
-  font-size: 10px;
+  min-width: 24px;
+  text-align: center;
+  font-size: 13px;
+  line-height: 1;
   font-weight: 600;
   letter-spacing: 0;
-  text-transform: uppercase;
-  padding: 3px 8px;
+  text-transform: none;
+  padding: 3px 7px;
   border-radius: 4px;
   border: 1px solid;
   background: transparent;
@@ -585,17 +588,17 @@ body {
 }
 
 .session-state-badge.state-complete {
-  min-width: 24px;
-  text-align: center;
-  font-size: 13px;
-  line-height: 1;
-  padding: 3px 7px;
   background: rgba(5, 150, 105, 0.12);
 }
 
 .session-state-badge.state-processing,
 .session-state-badge.state-spawning {
   animation: badge-pulse 2s ease-in-out infinite;
+}
+
+.session-state-badge.state-processing,
+.session-state-badge.state-spawning {
+  font-size: 12px;
 }
 
 .session-agent-badge {
