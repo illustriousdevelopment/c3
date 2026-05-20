@@ -32,6 +32,7 @@ export interface C3Session {
   id: string;
   projectName: string;
   projectPath?: string;
+  agentKind?: 'claude' | 'codex' | 'unknown';
   state: SessionState;
   tmuxTarget?: string;
   lastActivity: string;
@@ -46,6 +47,7 @@ export interface SoundConfig {
 
 export interface AppSettings {
   terminal_app: string;
+  default_agent: 'claude' | 'codex';
   notifications_enabled: boolean;
   permission_sound: SoundConfig;
   input_sound: SoundConfig;
@@ -54,6 +56,8 @@ export interface AppSettings {
 
 export interface HookStatus {
   hooks_installed: boolean;
+  claude_hooks_installed: boolean;
+  codex_hooks_installed: boolean;
   hook_script_exists: boolean;
   jq_installed: boolean;
   terminal_notifier_installed: boolean;

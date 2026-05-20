@@ -59,9 +59,9 @@ export function WarRoom() {
         <div className="empty-state">
           <div className="empty-icon">◇</div>
           <h2>No Active Sessions</h2>
-          <p>Start a Claude Code session in tmux to see it here.</p>
+          <p>Start a Claude Code or Codex session in tmux to see it here.</p>
           <p className="hint">
-            C3 scans tmux for Claude panes every few seconds.
+            C3 scans tmux for agent panes every few seconds.
           </p>
         </div>
       </div>

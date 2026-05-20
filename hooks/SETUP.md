@@ -1,6 +1,6 @@
 # C3 Hooks Setup
 
-This document explains how to configure Claude Code to send real-time notifications to the C3 (Claude Command Center) app.
+This document explains how to configure Claude Code and Codex to send real-time notifications to the C3 app.
 
 ## Quick Setup
 
@@ -25,32 +25,34 @@ This document explains how to configure Claude Code to send real-time notificati
        "Stop": [
          {
            "matcher": "",
-           "hooks": [{ "type": "command", "command": "$HOME/.local/bin/c3-hook.sh Stop" }]
+           "hooks": [{ "type": "command", "command": "C3_AGENT_KIND=claude $HOME/.local/bin/c3-hook.sh Stop" }]
          }
        ],
        "Notification": [
          {
            "matcher": "",
-           "hooks": [{ "type": "command", "command": "$HOME/.local/bin/c3-hook.sh Notification" }]
+           "hooks": [{ "type": "command", "command": "C3_AGENT_KIND=claude $HOME/.local/bin/c3-hook.sh Notification" }]
          }
        ],
        "PermissionRequest": [
          {
            "matcher": "",
-           "hooks": [{ "type": "command", "command": "$HOME/.local/bin/c3-hook.sh PermissionRequest" }]
+           "hooks": [{ "type": "command", "command": "C3_AGENT_KIND=claude $HOME/.local/bin/c3-hook.sh PermissionRequest" }]
          }
        ],
        "SessionStart": [
          {
            "matcher": "",
-           "hooks": [{ "type": "command", "command": "$HOME/.local/bin/c3-hook.sh SessionStart" }]
+           "hooks": [{ "type": "command", "command": "C3_AGENT_KIND=claude $HOME/.local/bin/c3-hook.sh SessionStart" }]
          }
        ]
      }
    }
    ```
 
-3. **Restart Claude Code** to pick up the new hooks.
+3. **For Codex**, add the same hook shape to `~/.codex/hooks.json`, using `C3_AGENT_KIND=codex` before the hook command.
+
+4. **Restart Claude Code and Codex** to pick up the new hooks.
 
 ## How It Works
 

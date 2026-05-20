@@ -30,6 +30,7 @@ const SOUND_OPTIONS = [
 
 const defaultSettings: AppSettings = {
   terminal_app: 'auto',
+  default_agent: 'codex',
   notifications_enabled: true,
   permission_sound: { enabled: true, sound: null },
   input_sound: { enabled: true, sound: null },
@@ -190,6 +191,21 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
           </div>
 
           <div className="settings-group">
+            <label className="settings-label">Default Agent</label>
+            <p className="settings-description">
+              Agent to start when creating a new tmux task.
+            </p>
+            <select
+              className="settings-select"
+              value={settings.default_agent}
+              onChange={(e) => setSettings({ ...settings, default_agent: e.target.value as AppSettings['default_agent'] })}
+            >
+              <option value="codex">Codex</option>
+              <option value="claude">Claude Code</option>
+            </select>
+          </div>
+
+          <div className="settings-group">
             <label className="settings-label">Notifications</label>
             <div className="settings-row">
               <label className="settings-checkbox">
@@ -230,14 +246,26 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
           <div className="settings-group">
             <label className="settings-label">Setup Hooks</label>
             <p className="settings-description">
-              Install C3 hooks into Claude Code for real-time session tracking.
+              Install C3 hooks into Claude Code and Codex for real-time session tracking.
             </p>
 
             <div className="hook-status">
               <div className="hook-status-row">
-                <span className="hook-status-label">Hooks installed</span>
+                <span className="hook-status-label">Any hooks installed</span>
                 <span className={`hook-status-badge ${hookStatus?.hooks_installed ? 'installed' : 'not-installed'}`}>
                   {hookStatus?.hooks_installed ? <><Check size={12} /> Installed</> : <><X size={12} /> Not installed</>}
+                </span>
+              </div>
+              <div className="hook-status-row">
+                <span className="hook-status-label">Claude hooks</span>
+                <span className={`hook-status-badge ${hookStatus?.claude_hooks_installed ? 'installed' : 'not-installed'}`}>
+                  {hookStatus?.claude_hooks_installed ? <><Check size={12} /> Installed</> : <><X size={12} /> Not installed</>}
+                </span>
+              </div>
+              <div className="hook-status-row">
+                <span className="hook-status-label">Codex hooks</span>
+                <span className={`hook-status-badge ${hookStatus?.codex_hooks_installed ? 'installed' : 'not-installed'}`}>
+                  {hookStatus?.codex_hooks_installed ? <><Check size={12} /> Installed</> : <><X size={12} /> Not installed</>}
                 </span>
               </div>
 
@@ -292,7 +320,7 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
                   {isInstallingHooks ? (
                     <><RefreshCw size={14} className="spin" /> Installing...</>
                   ) : (
-                    <><Download size={14} /> Install C3 Hooks</>
+                    <><Download size={14} /> Install Agent Hooks</>
                   )}
                 </button>
               </div>
@@ -302,11 +330,11 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
           <div className="settings-info">
             <h3>About C3</h3>
             <p>
-              C3 monitors your tmux panes for Claude Code sessions and displays
+              C3 monitors your tmux panes for Claude Code and Codex sessions and displays
               them in a unified dashboard.
             </p>
             <p className="settings-requirements">
-              <strong>Requirements:</strong> tmux, Claude Code
+              <strong>Requirements:</strong> tmux, Claude Code or Codex
             </p>
           </div>
         </div>

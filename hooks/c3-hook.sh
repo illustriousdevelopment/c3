@@ -1,5 +1,5 @@
 #!/bin/bash
-# C3 Hook Script for Claude Code
+# C3 Hook Script for Claude Code and Codex
 # Replaces notify-with-tmux.sh — C3 handles notifications, sounds, and UI updates.
 #
 # Install:
@@ -7,13 +7,14 @@
 #   cp c3-hook.sh ~/.local/bin/c3-hook.sh
 #   chmod +x ~/.local/bin/c3-hook.sh
 #
-# Then configure ~/.claude/settings.json hooks to call this script.
+# Then configure Claude Code or Codex hooks to call this script.
 
 C3_HOOK_URL="${C3_HOOK_URL:-http://127.0.0.1:9398/hook}"
 
 # Hook type is passed as first argument (Stop, Notification, PermissionRequest, SessionStart)
 # Note: We use PermissionRequest (not PreToolUse) — it only fires when user approval is needed.
 HOOK_TYPE="${1:-unknown}"
+AGENT_KIND="${C3_AGENT_KIND:-}"
 
 # Read the hook data from stdin
 HOOK_DATA=$(cat)
@@ -27,7 +28,7 @@ TOOL_INPUT=$(echo "$HOOK_DATA" | jq -c '.tool_input // .input // null' 2>/dev/nu
 SESSION_ID=$(echo "$HOOK_DATA" | jq -r '.session_id // empty' 2>/dev/null)
 
 # Check if running with --dangerously-skip-permissions
-# Look at the parent Claude process command line
+# Look at the parent agent process command line
 SKIP_PERMS=false
 CLAUDE_PID=$(pgrep -P "$$" -f claude 2>/dev/null || echo "")
 if [ -z "$CLAUDE_PID" ]; then
@@ -36,8 +37,23 @@ if [ -z "$CLAUDE_PID" ]; then
 fi
 if [ -n "$CLAUDE_PID" ]; then
     CLAUDE_CMD=$(ps -o command= -p "$CLAUDE_PID" 2>/dev/null)
+    if [ -z "$AGENT_KIND" ]; then
+        if echo "$CLAUDE_CMD" | grep -qi "codex"; then
+            AGENT_KIND="codex"
+        elif echo "$CLAUDE_CMD" | grep -qi "claude"; then
+            AGENT_KIND="claude"
+        fi
+    fi
     if echo "$CLAUDE_CMD" | grep -q "dangerously-skip-permissions"; then
         SKIP_PERMS=true
+    fi
+fi
+
+if [ -z "$AGENT_KIND" ]; then
+    if echo "$HOOK_DATA" | jq -e '.. | strings | select(test("codex"; "i"))' >/dev/null 2>&1; then
+        AGENT_KIND="codex"
+    else
+        AGENT_KIND="claude"
     fi
 fi
 
@@ -57,6 +73,7 @@ fi
 # Build the notification payload
 PAYLOAD=$(jq -n \
   --arg hook_type "$HOOK_TYPE" \
+  --arg agent_kind "$AGENT_KIND" \
   --arg cwd "$CWD" \
   --arg session_id "$SESSION_ID" \
   --arg tool_name "$TOOL_NAME" \
@@ -68,6 +85,7 @@ PAYLOAD=$(jq -n \
   --arg tmux_window_name "$TMUX_WINDOW_NAME" \
   '{
     hook_type: $hook_type,
+    agent_kind: $agent_kind,
     cwd: $cwd,
     session_id: (if $session_id == "" then null else $session_id end),
     tool_name: (if $tool_name == "" then null else $tool_name end),
@@ -81,7 +99,7 @@ PAYLOAD=$(jq -n \
     }
   }')
 
-# Send to C3 (fire and forget, don't block Claude)
+# Send to C3 (fire and forget, don't block the agent)
 curl -s -X POST "$C3_HOOK_URL" \
   -H "Content-Type: application/json" \
   -d "$PAYLOAD" \

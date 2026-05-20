@@ -81,6 +81,8 @@ impl Default for SoundConfig {
 pub struct AppSettings {
     #[serde(default = "default_terminal")]
     pub terminal_app: String,
+    #[serde(default = "default_agent")]
+    pub default_agent: String,
     #[serde(default = "default_true")]
     pub notifications_enabled: bool,
     #[serde(default)]
@@ -95,6 +97,10 @@ fn default_terminal() -> String {
     "auto".to_string()
 }
 
+fn default_agent() -> String {
+    "codex".to_string()
+}
+
 fn default_true() -> bool {
     true
 }
@@ -103,6 +109,7 @@ impl Default for AppSettings {
     fn default() -> Self {
         Self {
             terminal_app: default_terminal(),
+            default_agent: default_agent(),
             notifications_enabled: true,
             permission_sound: SoundConfig::default(),
             input_sound: SoundConfig::default(),
@@ -249,6 +256,8 @@ pub struct C3Session {
     pub project_name: String,
     #[serde(rename = "projectPath")]
     pub project_path: Option<String>,
+    #[serde(rename = "agentKind")]
+    pub agent_kind: Option<String>,
     pub state: SessionState,
     #[serde(rename = "tmuxTarget")]
     pub tmux_target: Option<String>,
@@ -259,7 +268,7 @@ pub struct C3Session {
     pub metrics: Option<SessionMetrics>,
 }
 
-// WebSocket messages from clients
+// Legacy action protocol kept for future approve/deny integration
 #[derive(Debug, Clone, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ClientMessage {
@@ -281,7 +290,7 @@ pub enum ClientMessage {
     },
 }
 
-// WebSocket messages to clients
+// Messages sent to agent integrations that support actions
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ServerMessage {
@@ -298,6 +307,7 @@ pub enum ServerMessage {
 pub struct HookEvent {
     pub timestamp: String,
     pub hook_type: String,
+    pub agent_kind: String,
     pub cwd: String,
     pub matched_session: Option<String>,
     pub new_state: String,
@@ -376,6 +386,7 @@ fn get_debug_info(state: tauri::State<Arc<AppState>>) -> serde_json::Value {
                 "state": format!("{:?}", s.state),
                 "project_name": s.project_name,
                 "project_path": s.project_path,
+                "agent_kind": s.agent_kind,
             })
         }).collect()
     };
@@ -548,9 +559,16 @@ async fn create_new_task() -> Result<String, String> {
         .trim()
         .to_string();
 
-    // Start claude in the new window
+    let settings = load_settings();
+    let agent_command = match settings.default_agent.as_str() {
+        "claude" => "claude",
+        "codex" => "codex",
+        _ => "codex",
+    };
+
+    // Start the configured agent in the new window
     let _ = cmd("tmux")
-        .args(["send-keys", "-t", &target, "claude", "Enter"])
+        .args(["send-keys", "-t", &target, agent_command, "Enter"])
         .output();
 
     Ok(target)
@@ -588,6 +606,8 @@ async fn play_sound(sound: String) -> Result<(), String> {
 #[derive(Debug, Clone, Serialize)]
 pub struct HookStatus {
     pub hooks_installed: bool,
+    pub claude_hooks_installed: bool,
+    pub codex_hooks_installed: bool,
     pub hook_script_exists: bool,
     pub jq_installed: bool,
     pub terminal_notifier_installed: bool,
@@ -611,11 +631,26 @@ fn check_hook_status(app_handle: AppHandle) -> HookStatus {
     let hook_script_path = format!("{}/.local/bin/c3-hook.sh", home);
     let hook_script_exists = std::path::Path::new(&hook_script_path).exists();
 
-    // Check if hooks are configured in Claude settings
-    let settings_path = format!("{}/.claude/settings.json", home);
-    let hooks_installed = if let Ok(content) = fs::read_to_string(&settings_path) {
+    // Check if hooks are configured in Claude and Codex settings
+    let claude_settings_path = format!("{}/.claude/settings.json", home);
+    let claude_hooks_installed = if let Ok(content) = fs::read_to_string(&claude_settings_path) {
         if let Ok(json) = serde_json::from_str::<serde_json::Value>(&content) {
-            // Check if any hook references c3-hook.sh
+            if let Some(hooks) = json.get("hooks") {
+                let hooks_str = hooks.to_string();
+                hooks_str.contains("c3-hook.sh")
+            } else {
+                false
+            }
+        } else {
+            false
+        }
+    } else {
+        false
+    };
+
+    let codex_hooks_path = format!("{}/.codex/hooks.json", home);
+    let codex_hooks_installed = if let Ok(content) = fs::read_to_string(&codex_hooks_path) {
+        if let Ok(json) = serde_json::from_str::<serde_json::Value>(&content) {
             if let Some(hooks) = json.get("hooks") {
                 let hooks_str = hooks.to_string();
                 hooks_str.contains("c3-hook.sh")
@@ -654,7 +689,9 @@ fn check_hook_status(app_handle: AppHandle) -> HookStatus {
         .map(|d| d.join("resources").join("c3-hook.sh"));
 
     HookStatus {
-        hooks_installed: hooks_installed && hook_script_exists,
+        hooks_installed: hook_script_exists && (claude_hooks_installed || codex_hooks_installed),
+        claude_hooks_installed: claude_hooks_installed && hook_script_exists,
+        codex_hooks_installed: codex_hooks_installed && hook_script_exists,
         hook_script_exists,
         jq_installed,
         terminal_notifier_installed,
@@ -770,25 +807,25 @@ fn setup_hooks(app_handle: AppHandle) -> SetupResult {
         "Stop": [
             {
                 "matcher": "",
-                "hooks": [{ "type": "command", "command": "$HOME/.local/bin/c3-hook.sh Stop" }]
+                "hooks": [{ "type": "command", "command": "C3_AGENT_KIND=claude $HOME/.local/bin/c3-hook.sh Stop" }]
             }
         ],
         "Notification": [
             {
                 "matcher": "",
-                "hooks": [{ "type": "command", "command": "$HOME/.local/bin/c3-hook.sh Notification" }]
+                "hooks": [{ "type": "command", "command": "C3_AGENT_KIND=claude $HOME/.local/bin/c3-hook.sh Notification" }]
             }
         ],
         "PermissionRequest": [
             {
                 "matcher": "",
-                "hooks": [{ "type": "command", "command": "$HOME/.local/bin/c3-hook.sh PermissionRequest" }]
+                "hooks": [{ "type": "command", "command": "C3_AGENT_KIND=claude $HOME/.local/bin/c3-hook.sh PermissionRequest" }]
             }
         ],
         "SessionStart": [
             {
                 "matcher": "",
-                "hooks": [{ "type": "command", "command": "$HOME/.local/bin/c3-hook.sh SessionStart" }]
+                "hooks": [{ "type": "command", "command": "C3_AGENT_KIND=claude $HOME/.local/bin/c3-hook.sh SessionStart" }]
             }
         ]
     });
@@ -832,9 +869,103 @@ fn setup_hooks(app_handle: AppHandle) -> SetupResult {
         }
     }
 
+    let codex_dir = PathBuf::from(&home).join(".codex");
+    let codex_hooks_file = codex_dir.join("hooks.json");
+    if let Err(e) = fs::create_dir_all(&codex_dir) {
+        return SetupResult {
+            success: false,
+            message: format!("Failed to create ~/.codex/: {}", e),
+            backup_path: backup_path_str,
+        };
+    }
+
+    if codex_hooks_file.exists() {
+        let timestamp = chrono::Utc::now().timestamp();
+        let backup = codex_dir.join(format!("hooks.json.backup.{}", timestamp));
+        if let Err(e) = fs::copy(&codex_hooks_file, &backup) {
+            return SetupResult {
+                success: false,
+                message: format!("Failed to backup Codex hooks: {}", e),
+                backup_path: backup_path_str,
+            };
+        }
+    }
+
+    let codex_existing: serde_json::Value = if codex_hooks_file.exists() {
+        fs::read_to_string(&codex_hooks_file)
+            .ok()
+            .and_then(|s| serde_json::from_str(&s).ok())
+            .unwrap_or_else(|| serde_json::json!({}))
+    } else {
+        serde_json::json!({})
+    };
+
+    let codex_c3_hooks = serde_json::json!({
+        "Stop": [
+            {
+                "matcher": "",
+                "hooks": [{ "type": "command", "command": "C3_AGENT_KIND=codex $HOME/.local/bin/c3-hook.sh Stop" }]
+            }
+        ],
+        "Notification": [
+            {
+                "matcher": "",
+                "hooks": [{ "type": "command", "command": "C3_AGENT_KIND=codex $HOME/.local/bin/c3-hook.sh Notification" }]
+            }
+        ],
+        "PermissionRequest": [
+            {
+                "matcher": "",
+                "hooks": [{ "type": "command", "command": "C3_AGENT_KIND=codex $HOME/.local/bin/c3-hook.sh PermissionRequest" }]
+            }
+        ],
+        "SessionStart": [
+            {
+                "matcher": "",
+                "hooks": [{ "type": "command", "command": "C3_AGENT_KIND=codex $HOME/.local/bin/c3-hook.sh SessionStart" }]
+            }
+        ]
+    });
+
+    let mut codex_settings = codex_existing.clone();
+    if !codex_settings.is_object() {
+        codex_settings = serde_json::json!({});
+    }
+    let codex_settings_obj = codex_settings.as_object_mut().unwrap();
+    let mut codex_merged_hooks = if let Some(existing_hooks) = codex_existing.get("hooks").and_then(|h| h.as_object()) {
+        existing_hooks.clone()
+    } else {
+        serde_json::Map::new()
+    };
+    if let Some(c3_obj) = codex_c3_hooks.as_object() {
+        for (key, value) in c3_obj {
+            codex_merged_hooks.insert(key.clone(), value.clone());
+        }
+    }
+    codex_settings_obj.insert("hooks".to_string(), serde_json::Value::Object(codex_merged_hooks));
+
+    match serde_json::to_string_pretty(&codex_settings) {
+        Ok(json) => {
+            if let Err(e) = fs::write(&codex_hooks_file, json) {
+                return SetupResult {
+                    success: false,
+                    message: format!("Failed to write Codex hooks: {}", e),
+                    backup_path: backup_path_str,
+                };
+            }
+        }
+        Err(e) => {
+            return SetupResult {
+                success: false,
+                message: format!("Failed to serialize Codex hooks: {}", e),
+                backup_path: backup_path_str,
+            };
+        }
+    }
+
     SetupResult {
         success: true,
-        message: "C3 hooks installed successfully! Restart Claude Code to activate.".to_string(),
+        message: "C3 hooks installed successfully! Restart Claude Code and Codex sessions to activate.".to_string(),
         backup_path: backup_path_str,
     }
 }
@@ -867,8 +998,6 @@ async fn close_pane(
     }
 }
 
-// WebSocket connection handler
-
 // Tmux context from hook
 #[derive(Debug, Clone, Deserialize, Default)]
 struct TmuxContext {
@@ -888,6 +1017,8 @@ struct HookNotification {
     hook_type: String,
     cwd: String,
     #[serde(default)]
+    agent_kind: Option<String>,
+    #[serde(default)]
     session_id: Option<String>,
     #[serde(default)]
     tool_name: Option<String>,
@@ -897,6 +1028,18 @@ struct HookNotification {
     skip_permissions: bool,
     #[serde(default)]
     tmux: Option<TmuxContext>,
+}
+
+fn normalize_agent_kind(agent_kind: Option<&str>) -> String {
+    match agent_kind.unwrap_or("").to_ascii_lowercase().as_str() {
+        "codex" => "codex".to_string(),
+        "claude" => "claude".to_string(),
+        _ => "unknown".to_string(),
+    }
+}
+
+fn shell_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "'\\''"))
 }
 
 /// Send an OS notification via terminal-notifier
@@ -922,14 +1065,35 @@ fn send_os_notification(
     // If we have tmux context, set up click-to-focus
     if let Some(tmux_ctx) = tmux {
         if !tmux_ctx.session.is_empty() && !tmux_ctx.window.is_empty() {
+            let settings = load_settings();
+            let terminal = if settings.terminal_app == "auto" {
+                detect_terminal().unwrap_or_else(|| "Terminal".to_string())
+            } else {
+                settings.terminal_app
+            };
+            let pane = if tmux_ctx.pane.is_empty() { "0" } else { &tmux_ctx.pane };
+            let target = format!("{}:{}.{}", tmux_ctx.session, tmux_ctx.window, pane);
+            let window_target = format!("{}:{}", tmux_ctx.session, tmux_ctx.window);
             let switch_script = format!(
-                "{home}/.claude/hooks/switch-tmux-pane.sh '{}' '{}' '{}'",
-                tmux_ctx.session, tmux_ctx.window, tmux_ctx.pane
+                "osascript -e {}; tmux switch-client -t {}; tmux select-window -t {}; tmux select-pane -t {}",
+                shell_quote(&format!("tell application \"{}\" to activate", terminal)),
+                shell_quote(&target),
+                shell_quote(&window_target),
+                shell_quote(&target),
             );
             notifier.arg("-execute").arg(&switch_script);
         }
     } else {
-        notifier.arg("-activate").arg("com.mitchellh.ghostty");
+        let settings = load_settings();
+        let terminal = if settings.terminal_app == "auto" {
+            detect_terminal().unwrap_or_else(|| "Terminal".to_string())
+        } else {
+            settings.terminal_app
+        };
+        notifier.arg("-execute").arg(format!(
+            "osascript -e {}",
+            shell_quote(&format!("tell application \"{}\" to activate", terminal)),
+        ));
     }
 
     if let Err(e) = notifier.spawn() {
@@ -967,6 +1131,7 @@ async fn handle_hook_request(
                 serde_json::json!({
                     "id": s.id,
                     "project_path": s.project_path,
+                    "agent_kind": s.agent_kind,
                     "state": format!("{:?}", s.state),
                     "project_name": s.project_name,
                 })
@@ -1024,8 +1189,10 @@ async fn handle_hook_request(
         }
     };
 
-    log::info!("Hook received: {} from {} (skip_perms={})",
-        notification.hook_type, notification.cwd, notification.skip_permissions);
+    let agent_kind = normalize_agent_kind(notification.agent_kind.as_deref());
+
+    log::info!("Hook received: {} from {} ({}, skip_perms={})",
+        notification.hook_type, notification.cwd, agent_kind, notification.skip_permissions);
 
     // Skip PermissionRequest when running with --dangerously-skip-permissions
     if notification.skip_permissions && notification.hook_type == "PermissionRequest" {
@@ -1033,6 +1200,7 @@ async fn handle_hook_request(
         state.log_hook_event(HookEvent {
             timestamp: Utc::now().format("%H:%M:%S%.3f").to_string(),
             hook_type: notification.hook_type.clone(),
+            agent_kind: agent_kind.clone(),
             cwd: notification.cwd.clone(),
             matched_session: None,
             new_state: "n/a".to_string(),
@@ -1071,6 +1239,7 @@ async fn handle_hook_request(
             state.log_hook_event(HookEvent {
                 timestamp: Utc::now().format("%H:%M:%S%.3f").to_string(),
                 hook_type: notification.hook_type.clone(),
+                agent_kind: agent_kind.clone(),
                 cwd: notification.cwd.clone(),
                 matched_session: None,
                 new_state: "n/a".to_string(),
@@ -1095,17 +1264,17 @@ async fn handle_hook_request(
     {
         "PermissionRequest" => Some((
             SessionState::AwaitingPermission,
-            "Claude needs permission to continue",
+            "Agent needs permission to continue",
             "Permission Required",
         )),
         "Notification" => Some((
             SessionState::AwaitingInput,
-            "Claude is waiting for your response",
+            "Agent is waiting for your response",
             "Input Needed",
         )),
         "Stop" => Some((
             SessionState::Complete,
-            "Claude has finished processing",
+            "Agent has finished processing",
             "Task Complete",
         )),
         "SessionStart" => Some((
@@ -1133,10 +1302,14 @@ async fn handle_hook_request(
     // Find matching session by cwd (exact match first, then prefix match)
     let (session_id, project_name) = {
         let sessions = state.sessions.read();
+        let found = notification
+            .session_id
+            .as_ref()
+            .and_then(|hook_session_id| sessions.get(hook_session_id));
         // Exact match
-        let found = sessions
+        let found = found.or_else(|| sessions
             .values()
-            .find(|s| s.project_path.as_deref() == Some(&notification.cwd));
+            .find(|s| s.project_path.as_deref() == Some(&notification.cwd)));
         // Prefix match: hook cwd starts with session path or vice versa
         let found = found.or_else(|| {
             sessions.values().find(|s| {
@@ -1149,8 +1322,77 @@ async fn handle_hook_request(
         });
         found.map(|s| (s.id.clone(), s.project_name.clone())).unzip()
     };
-    let session_id: Option<String> = session_id;
-    let project_name: Option<String> = project_name;
+    let mut session_id: Option<String> = session_id;
+    let mut project_name: Option<String> = project_name;
+
+    if session_id.is_none() {
+        let tmux_target = notification.tmux.as_ref().and_then(|tmux_ctx| {
+            if !tmux_ctx.session.is_empty() && !tmux_ctx.window.is_empty() {
+                let pane = if tmux_ctx.pane.is_empty() { "0" } else { &tmux_ctx.pane };
+                Some(format!("{}:{}.{}", tmux_ctx.session, tmux_ctx.window, pane))
+            } else {
+                None
+            }
+        });
+        let fallback_hook_id = notification
+            .session_id
+            .as_ref()
+            .map(|id| format!("hook:{}:{}", agent_kind, id));
+
+        if tmux_target.is_some() || fallback_hook_id.is_some() {
+            let sid = tmux_target
+                .as_ref()
+                .map(|target| format!("tmux:{}", target))
+                .or(fallback_hook_id)
+                .unwrap();
+            let name = std::path::Path::new(&notification.cwd)
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_else(|| agent_kind.clone());
+
+            let pending_action = if new_state == SessionState::AwaitingPermission {
+                Some(PendingAction {
+                    action_type: "permission".to_string(),
+                    description: format!(
+                        "Wants to use {}",
+                        notification.tool_name.as_deref().unwrap_or("a tool")
+                    ),
+                    tool: notification.tool_name.clone(),
+                    command: notification
+                        .tool_input
+                        .as_ref()
+                        .and_then(|i| i.get("command"))
+                        .and_then(|c| c.as_str())
+                        .map(|s| {
+                            if s.len() > 100 {
+                                format!("{}...", &s[..97])
+                            } else {
+                                s.to_string()
+                            }
+                        }),
+                })
+            } else {
+                None
+            };
+
+            let session = C3Session {
+                id: sid.clone(),
+                project_name: name.clone(),
+                project_path: Some(notification.cwd.clone()),
+                agent_kind: Some(agent_kind.clone()),
+                state: new_state.clone(),
+                tmux_target,
+                last_activity: Utc::now(),
+                pending_action,
+                metrics: None,
+            };
+
+            state.sessions.write().insert(sid.clone(), session.clone());
+            let _ = app_handle.emit("session-update", session);
+            session_id = Some(sid);
+            project_name = Some(name);
+        }
+    }
 
     if let Some(ref sid) = session_id {
         // Check if we should skip this state change
@@ -1166,6 +1408,7 @@ async fn handle_hook_request(
             state.log_hook_event(HookEvent {
                 timestamp: Utc::now().format("%H:%M:%S%.3f").to_string(),
                 hook_type: notification.hook_type.clone(),
+                agent_kind: agent_kind.clone(),
                 cwd: notification.cwd.clone(),
                 matched_session: Some(sid.clone()),
                 new_state: format!("{:?}", new_state),
@@ -1186,6 +1429,9 @@ async fn handle_hook_request(
             let old_state = session.state.clone();
             session.state = new_state.clone();
             session.last_activity = Utc::now();
+            if session.agent_kind.is_none() || session.agent_kind.as_deref() == Some("unknown") {
+                session.agent_kind = Some(agent_kind.clone());
+            }
 
             // Set pending action for permission requests
             if new_state == SessionState::AwaitingPermission {
@@ -1220,6 +1466,7 @@ async fn handle_hook_request(
             state.log_hook_event(HookEvent {
                 timestamp: Utc::now().format("%H:%M:%S%.3f").to_string(),
                 hook_type: notification.hook_type.clone(),
+                agent_kind: agent_kind.clone(),
                 cwd: notification.cwd.clone(),
                 matched_session: Some(sid.clone()),
                 new_state: format!("{:?}", new_state),
@@ -1252,6 +1499,7 @@ async fn handle_hook_request(
         state.log_hook_event(HookEvent {
             timestamp: Utc::now().format("%H:%M:%S%.3f").to_string(),
             hook_type: notification.hook_type.clone(),
+            agent_kind: agent_kind.clone(),
             cwd: notification.cwd.clone(),
             matched_session: None,
             new_state: format!("{:?}", new_state),

@@ -55,6 +55,17 @@ function getStateLabel(state: string): string {
   }
 }
 
+function getAgentLabel(agentKind: string | undefined): string {
+  switch (agentKind) {
+    case 'codex':
+      return 'Codex';
+    case 'claude':
+      return 'Claude';
+    default:
+      return 'Agent';
+  }
+}
+
 function truncateCommand(cmd: string | undefined, maxLength: number = 60): string {
   if (!cmd) return '';
   if (cmd.length <= maxLength) return cmd;
@@ -193,6 +204,9 @@ export function SessionCard({ session, shortcut }: SessionCardProps) {
             {session.projectName}
           </span>
           <div className="session-header-right">
+            <span className={`session-agent-badge agent-${session.agentKind || 'unknown'}`}>
+              {getAgentLabel(session.agentKind)}
+            </span>
             {tag && (
               <span className="session-tag" title={tag}>
                 {tag}

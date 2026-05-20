@@ -9,14 +9,15 @@ use std::sync::Arc;
 use std::time::SystemTime;
 use tauri::{AppHandle, Emitter};
 
-/// Info about a tmux pane running Claude
+/// Info about a tmux pane running an AI coding agent
 #[derive(Debug)]
-struct ClaudePane {
+struct AgentPane {
     target: String,
     cwd: String,
     pane_title: String,
     window_name: String,
     pane_command: String,
+    agent_kind: String,
 }
 
 /// State derived from reading JSONL conversation files
@@ -27,8 +28,8 @@ struct ConversationState {
     last_message_time: Option<DateTime<Utc>>,
 }
 
-/// Scan tmux for all panes running Claude
-fn find_claude_panes() -> Vec<ClaudePane> {
+/// Scan tmux for all panes running Claude Code or Codex
+fn find_agent_panes() -> Vec<AgentPane> {
     let output = cmd("tmux")
         .args([
             "list-panes",
@@ -74,17 +75,28 @@ fn find_claude_panes() -> Vec<ClaudePane> {
         let is_active_claude = pane_command.contains("claude")
             || (pane_command == "node" && is_child_claude(pane_pid))
             || is_claude_version_binary(pane_command);
+        let is_active_codex = pane_command.contains("codex")
+            || (pane_command == "node" && is_child_codex(pane_pid));
 
-        // Also detect completed Claude sessions (back to shell but title has marker)
+        // Also detect completed sessions (back to shell but title has marker)
         let has_claude_title = pane_title.contains('✳') || pane_title.contains("Claude");
+        let has_codex_title = pane_title.contains("Codex") || pane_title.contains("codex");
 
-        if is_active_claude || (has_claude_title && !is_active_claude && pane_command == "zsh") {
-            panes.push(ClaudePane {
+        if is_active_claude
+            || is_active_codex
+            || ((has_claude_title || has_codex_title) && pane_command == "zsh")
+        {
+            panes.push(AgentPane {
                 target: target.to_string(),
                 cwd: cwd.to_string(),
                 pane_title: pane_title.to_string(),
                 window_name: window_name.to_string(),
                 pane_command: pane_command.to_string(),
+                agent_kind: if is_active_codex || has_codex_title {
+                    "codex".to_string()
+                } else {
+                    "claude".to_string()
+                },
             });
         }
     }
@@ -97,6 +109,15 @@ fn is_child_claude(pane_pid: &str) -> bool {
     // pgrep for claude as a child of the pane process
     cmd("pgrep")
         .args(["-P", pane_pid, "-f", "claude"])
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+}
+
+/// Check if any child process of the given PID is codex
+fn is_child_codex(pane_pid: &str) -> bool {
+    cmd("pgrep")
+        .args(["-P", pane_pid, "-f", "codex"])
         .output()
         .map(|o| o.status.success())
         .unwrap_or(false)
@@ -145,6 +166,70 @@ fn find_active_jsonl(project_dir: &Path) -> Option<PathBuf> {
                 .unwrap_or(SystemTime::UNIX_EPOCH)
         })
         .map(|e| e.path())
+}
+
+fn codex_sessions_dir() -> PathBuf {
+    dirs_next()
+        .unwrap_or_else(|| PathBuf::from("/tmp"))
+        .join(".codex")
+        .join("sessions")
+}
+
+fn collect_jsonl_files(dir: &Path, out: &mut Vec<PathBuf>) {
+    let entries = match fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(_) => return,
+    };
+
+    for entry in entries.filter_map(|e| e.ok()) {
+        let path = entry.path();
+        if path.is_dir() {
+            collect_jsonl_files(&path, out);
+        } else if path.extension().map(|ext| ext == "jsonl").unwrap_or(false) {
+            out.push(path);
+        }
+    }
+}
+
+fn codex_jsonl_matches_cwd(path: &Path, cwd: &str) -> bool {
+    let file = match fs::File::open(path) {
+        Ok(file) => file,
+        Err(_) => return false,
+    };
+
+    for line in BufReader::new(file).lines().filter_map(|l| l.ok()).take(20) {
+        let parsed: serde_json::Value = match serde_json::from_str(&line) {
+            Ok(parsed) => parsed,
+            Err(_) => continue,
+        };
+
+        let session_cwd = parsed
+            .get("payload")
+            .and_then(|p| p.get("cwd"))
+            .and_then(|v| v.as_str());
+
+        if session_cwd == Some(cwd) {
+            return true;
+        }
+    }
+
+    false
+}
+
+fn find_active_codex_jsonl(cwd: &str) -> Option<PathBuf> {
+    let mut files = Vec::new();
+    collect_jsonl_files(&codex_sessions_dir(), &mut files);
+    files.sort_by_key(|path| {
+        fs::metadata(path)
+            .and_then(|m| m.modified())
+            .unwrap_or(SystemTime::UNIX_EPOCH)
+    });
+    files.reverse();
+
+    files
+        .into_iter()
+        .take(200)
+        .find(|path| codex_jsonl_matches_cwd(path, cwd))
 }
 
 /// Read the last N lines of a file (reads from end)
@@ -454,8 +539,133 @@ fn detect_state_from_jsonl(jsonl_path: &Path) -> ConversationState {
     }
 }
 
+fn detect_state_from_codex_jsonl(jsonl_path: &Path) -> ConversationState {
+    let last_lines = read_last_lines(jsonl_path, 50);
+    if last_lines.is_empty() {
+        return ConversationState {
+            state: SessionState::Processing,
+            pending_action: None,
+            last_message_time: None,
+        };
+    }
+
+    let file_age_secs = fs::metadata(jsonl_path)
+        .and_then(|m| m.modified())
+        .ok()
+        .and_then(|t| SystemTime::now().duration_since(t).ok())
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+
+    let mut latest_timestamp: Option<DateTime<Utc>> = None;
+    for line in last_lines.iter().rev() {
+        if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(line) {
+            if let Some(ts) = extract_message_timestamp(&parsed) {
+                latest_timestamp = Some(ts);
+                break;
+            }
+        }
+    }
+
+    for line in last_lines.iter().rev() {
+        let parsed: serde_json::Value = match serde_json::from_str(line) {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+
+        let top_type = parsed.get("type").and_then(|v| v.as_str()).unwrap_or("");
+        let payload = parsed.get("payload").unwrap_or(&serde_json::Value::Null);
+
+        if top_type == "event_msg" {
+            match payload.get("type").and_then(|v| v.as_str()).unwrap_or("") {
+                "agent_message" => {
+                    return ConversationState {
+                        state: SessionState::AwaitingInput,
+                        pending_action: Some(PendingAction {
+                            action_type: "input".to_string(),
+                            description: "Waiting for user input".to_string(),
+                            tool: None,
+                            command: None,
+                        }),
+                        last_message_time: latest_timestamp,
+                    };
+                }
+                "user_message" => {
+                    return ConversationState {
+                        state: SessionState::Processing,
+                        pending_action: None,
+                        last_message_time: latest_timestamp,
+                    };
+                }
+                "exec_begin" | "patch_apply_begin" | "turn_context" | "token_count" => {
+                    return ConversationState {
+                        state: SessionState::Processing,
+                        pending_action: None,
+                        last_message_time: latest_timestamp,
+                    };
+                }
+                _ => {}
+            }
+        }
+
+        if top_type == "response_item" {
+            let payload_type = payload.get("type").and_then(|v| v.as_str()).unwrap_or("");
+            let role = payload.get("role").and_then(|v| v.as_str()).unwrap_or("");
+            if payload_type == "message" && role == "assistant" {
+                return ConversationState {
+                    state: SessionState::AwaitingInput,
+                    pending_action: Some(PendingAction {
+                        action_type: "input".to_string(),
+                        description: "Waiting for user input".to_string(),
+                        tool: None,
+                        command: None,
+                    }),
+                    last_message_time: latest_timestamp,
+                };
+            }
+            if payload_type == "function_call" || payload_type == "local_shell_call" {
+                return ConversationState {
+                    state: SessionState::Processing,
+                    pending_action: None,
+                    last_message_time: latest_timestamp,
+                };
+            }
+        }
+    }
+
+    if file_age_secs > 15 {
+        return ConversationState {
+            state: SessionState::AwaitingInput,
+            pending_action: Some(PendingAction {
+                action_type: "input".to_string(),
+                description: "Waiting for user input".to_string(),
+                tool: None,
+                command: None,
+            }),
+            last_message_time: latest_timestamp,
+        };
+    }
+
+    ConversationState {
+        state: SessionState::Processing,
+        pending_action: None,
+        last_message_time: latest_timestamp,
+    }
+}
+
+fn latest_timestamp_from_jsonl(jsonl_path: &Path) -> Option<DateTime<Utc>> {
+    let lines = read_last_lines(jsonl_path, 50);
+    for line in lines.iter().rev() {
+        if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(line) {
+            if let Some(ts) = extract_message_timestamp(&parsed) {
+                return Some(ts);
+            }
+        }
+    }
+    None
+}
+
 /// Derive a display name from pane info
-fn derive_project_name(pane: &ClaudePane) -> String {
+fn derive_project_name(pane: &AgentPane) -> String {
     // Best source: pane_title (set by Claude, e.g. "✳ R2 Upload Failure")
     let title = pane.pane_title.trim();
     if !title.is_empty()
@@ -472,16 +682,25 @@ fn derive_project_name(pane: &ClaudePane) -> String {
         }
     }
 
-    // Fallback: last path component of cwd
+    // Fallback: last path component of cwd, then tmux window name
     Path::new(&pane.cwd)
         .file_name()
         .map(|n| n.to_string_lossy().to_string())
-        .unwrap_or_else(|| "claude".to_string())
+        .filter(|n| !n.is_empty())
+        .or_else(|| {
+            let window_name = pane.window_name.trim();
+            if window_name.is_empty() {
+                None
+            } else {
+                Some(window_name.to_string())
+            }
+        })
+        .unwrap_or_else(|| pane.agent_kind.clone())
 }
 
 /// Run a single scan cycle
 pub fn scan_tmux(state: &Arc<AppState>, app_handle: &AppHandle) {
-    let panes = find_claude_panes();
+    let panes = find_agent_panes();
     let mut found_targets: HashSet<String> = HashSet::new();
 
     for pane in &panes {
@@ -498,23 +717,25 @@ pub fn scan_tmux(state: &Arc<AppState>, app_handle: &AppHandle) {
 
         let conv_state = if pane.pane_command == "zsh" {
             // Session ended — still grab the last message timestamp from JSONL
-            let project_dir = cwd_to_project_dir(&pane.cwd);
-            let last_msg_time = find_active_jsonl(&project_dir)
-                .and_then(|jsonl| {
-                    let lines = read_last_lines(&jsonl, 30);
-                    for line in lines.iter().rev() {
-                        if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(line) {
-                            if let Some(ts) = extract_message_timestamp(&parsed) {
-                                return Some(ts);
-                            }
-                        }
-                    }
-                    None
-                });
+            let last_msg_time = if pane.agent_kind == "codex" {
+                find_active_codex_jsonl(&pane.cwd).and_then(|jsonl| latest_timestamp_from_jsonl(&jsonl))
+            } else {
+                let project_dir = cwd_to_project_dir(&pane.cwd);
+                find_active_jsonl(&project_dir).and_then(|jsonl| latest_timestamp_from_jsonl(&jsonl))
+            };
             ConversationState {
                 state: SessionState::Complete,
                 pending_action: None,
                 last_message_time: last_msg_time,
+            }
+        } else if pane.agent_kind == "codex" {
+            match find_active_codex_jsonl(&pane.cwd) {
+                Some(jsonl) => detect_state_from_codex_jsonl(&jsonl),
+                None => ConversationState {
+                    state: SessionState::Processing,
+                    pending_action: None,
+                    last_message_time: None,
+                },
             }
         } else if title_starts_with_idle_marker {
             // ✳ means Claude Code is idle — check JSONL for AwaitingInput vs AwaitingPermission
@@ -573,6 +794,7 @@ pub fn scan_tmux(state: &Arc<AppState>, app_handle: &AppHandle) {
             if let Some(session) = sessions.get_mut(&session_id) {
                 session.project_path = Some(pane.cwd.clone());
                 session.tmux_target = Some(pane.target.clone());
+                session.agent_kind = Some(pane.agent_kind.clone());
                 // Don't touch state, pending_action, or last_activity
             }
             drop(sessions);
@@ -582,8 +804,13 @@ pub fn scan_tmux(state: &Arc<AppState>, app_handle: &AppHandle) {
         // Use the JSONL message timestamp for last_activity when available,
         // fall back to JSONL file modification time, then Utc::now() as last resort
         let jsonl_activity = conv_state.last_message_time.unwrap_or_else(|| {
-            let project_dir = cwd_to_project_dir(&pane.cwd);
-            find_active_jsonl(&project_dir)
+            let jsonl = if pane.agent_kind == "codex" {
+                find_active_codex_jsonl(&pane.cwd)
+            } else {
+                let project_dir = cwd_to_project_dir(&pane.cwd);
+                find_active_jsonl(&project_dir)
+            };
+            jsonl
                 .and_then(|p| fs::metadata(&p).ok())
                 .and_then(|m| m.modified().ok())
                 .and_then(|t| {
@@ -617,6 +844,7 @@ pub fn scan_tmux(state: &Arc<AppState>, app_handle: &AppHandle) {
             id: session_id.clone(),
             project_name,
             project_path: Some(pane.cwd.clone()),
+            agent_kind: Some(pane.agent_kind.clone()),
             state: conv_state.state,
             tmux_target: Some(pane.target.clone()),
             last_activity,

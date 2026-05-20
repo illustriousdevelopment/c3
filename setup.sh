@@ -1,6 +1,6 @@
 #!/bin/bash
 # C3 Setup Script
-# Installs hooks and checks dependencies for C3 (Claude Command Center)
+# Installs hooks and checks dependencies for C3 (Agent Command Center)
 #
 # Usage:
 #   ./setup.sh
@@ -21,7 +21,7 @@ warn()  { echo -e "${YELLOW}[warn]${NC} $1"; }
 fail()  { echo -e "${RED}[error]${NC} $1"; }
 
 echo ""
-echo -e "${BLUE}C3${NC} — Claude Command Center Setup"
+echo -e "${BLUE}C3${NC} — Agent Command Center Setup"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo ""
 
@@ -148,31 +148,61 @@ if [ -f "$SETTINGS_FILE" ]; then
     ok "Backed up settings to $BACKUP"
 fi
 
-# Define the hooks we want to add
+# Define the Claude Code hooks we want to add
 C3_HOOKS=$(cat <<'HOOKS_JSON'
 {
   "Stop": [
     {
       "matcher": "",
-      "hooks": [{ "type": "command", "command": "$HOME/.local/bin/c3-hook.sh Stop" }]
+      "hooks": [{ "type": "command", "command": "C3_AGENT_KIND=claude $HOME/.local/bin/c3-hook.sh Stop" }]
     }
   ],
   "Notification": [
     {
       "matcher": "",
-      "hooks": [{ "type": "command", "command": "$HOME/.local/bin/c3-hook.sh Notification" }]
+      "hooks": [{ "type": "command", "command": "C3_AGENT_KIND=claude $HOME/.local/bin/c3-hook.sh Notification" }]
     }
   ],
   "PermissionRequest": [
     {
       "matcher": "",
-      "hooks": [{ "type": "command", "command": "$HOME/.local/bin/c3-hook.sh PermissionRequest" }]
+      "hooks": [{ "type": "command", "command": "C3_AGENT_KIND=claude $HOME/.local/bin/c3-hook.sh PermissionRequest" }]
     }
   ],
   "SessionStart": [
     {
       "matcher": "",
-      "hooks": [{ "type": "command", "command": "$HOME/.local/bin/c3-hook.sh SessionStart" }]
+      "hooks": [{ "type": "command", "command": "C3_AGENT_KIND=claude $HOME/.local/bin/c3-hook.sh SessionStart" }]
+    }
+  ]
+}
+HOOKS_JSON
+)
+
+CODEX_C3_HOOKS=$(cat <<'HOOKS_JSON'
+{
+  "Stop": [
+    {
+      "matcher": "",
+      "hooks": [{ "type": "command", "command": "C3_AGENT_KIND=codex $HOME/.local/bin/c3-hook.sh Stop" }]
+    }
+  ],
+  "Notification": [
+    {
+      "matcher": "",
+      "hooks": [{ "type": "command", "command": "C3_AGENT_KIND=codex $HOME/.local/bin/c3-hook.sh Notification" }]
+    }
+  ],
+  "PermissionRequest": [
+    {
+      "matcher": "",
+      "hooks": [{ "type": "command", "command": "C3_AGENT_KIND=codex $HOME/.local/bin/c3-hook.sh PermissionRequest" }]
+    }
+  ],
+  "SessionStart": [
+    {
+      "matcher": "",
+      "hooks": [{ "type": "command", "command": "C3_AGENT_KIND=codex $HOME/.local/bin/c3-hook.sh SessionStart" }]
     }
   ]
 }
@@ -221,6 +251,31 @@ else
     fi
 fi
 
+CODEX_HOOKS_FILE="$HOME/.codex/hooks.json"
+info "Configuring Codex hooks..."
+mkdir -p "$HOME/.codex"
+if [ -f "$CODEX_HOOKS_FILE" ]; then
+    BACKUP="$CODEX_HOOKS_FILE.backup.$(date +%s)"
+    cp "$CODEX_HOOKS_FILE" "$BACKUP"
+    ok "Backed up Codex hooks to $BACKUP"
+fi
+
+if command -v jq &>/dev/null; then
+    if [ -f "$CODEX_HOOKS_FILE" ]; then
+        EXISTING=$(cat "$CODEX_HOOKS_FILE")
+        MERGED=$(echo "$EXISTING" | jq --argjson c3hooks "$CODEX_C3_HOOKS" '
+            .hooks = ((.hooks // {}) * $c3hooks)
+        ')
+        echo "$MERGED" | jq '.' > "$CODEX_HOOKS_FILE"
+        ok "Merged C3 hooks into Codex hooks"
+    else
+        echo "{\"hooks\": $CODEX_C3_HOOKS}" | jq '.' > "$CODEX_HOOKS_FILE"
+        ok "Created $CODEX_HOOKS_FILE with C3 hooks"
+    fi
+else
+    warn "jq not installed — cannot safely merge Codex hooks"
+fi
+
 echo ""
 
 # ─── Summary ─────────────────────────────────────────────────────────
@@ -230,9 +285,10 @@ echo -e "${GREEN}Setup complete!${NC}"
 echo ""
 echo "  Hook script:  $HOOK_DEST"
 echo "  Settings:     $SETTINGS_FILE"
+echo "  Codex hooks:  $CODEX_HOOKS_FILE"
 echo ""
 echo "Next steps:"
 echo "  1. Open C3"
-echo "  2. Restart any running Claude Code sessions"
+echo "  2. Restart any running Claude Code or Codex sessions"
 echo "  3. Sessions will now appear in C3 automatically"
 echo ""
