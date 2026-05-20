@@ -261,6 +261,8 @@ pub struct C3Session {
     pub state: SessionState,
     #[serde(rename = "tmuxTarget")]
     pub tmux_target: Option<String>,
+    #[serde(rename = "terminalTty")]
+    pub terminal_tty: Option<String>,
     #[serde(rename = "lastActivity")]
     pub last_activity: DateTime<Utc>,
     #[serde(rename = "pendingAction")]
@@ -387,6 +389,8 @@ fn get_debug_info(state: tauri::State<Arc<AppState>>) -> serde_json::Value {
                 "project_name": s.project_name,
                 "project_path": s.project_path,
                 "agent_kind": s.agent_kind,
+                "tmux_target": s.tmux_target,
+                "terminal_tty": s.terminal_tty,
             })
         }).collect()
     };
@@ -427,6 +431,10 @@ fn get_available_terminals() -> Vec<String> {
 // Tauri command: Focus terminal
 #[tauri::command]
 async fn focus_terminal(tmux_target: String) -> Result<(), String> {
+    focus_tmux_target(&tmux_target).await
+}
+
+async fn focus_tmux_target(tmux_target: &str) -> Result<(), String> {
     // Parse tmux target: "session:window.pane"
     let parts: Vec<&str> = tmux_target.split(':').collect();
     if parts.len() != 2 {
@@ -476,6 +484,46 @@ async fn focus_terminal(tmux_target: String) -> Result<(), String> {
         .output();
 
     Ok(())
+}
+
+fn configured_terminal() -> String {
+    let settings = load_settings();
+    if settings.terminal_app == "auto" {
+        detect_terminal().unwrap_or_else(|| "Terminal".to_string())
+    } else {
+        settings.terminal_app
+    }
+}
+
+fn activate_terminal_app() -> Result<(), String> {
+    let terminal = configured_terminal();
+    let activate_script = format!("tell application \"{}\" to activate", terminal);
+    cmd("osascript")
+        .args(["-e", &activate_script])
+        .output()
+        .map_err(|e| format!("Failed to activate {}: {}", terminal, e))?;
+    Ok(())
+}
+
+#[tauri::command]
+async fn focus_session(
+    state: tauri::State<'_, Arc<AppState>>,
+    session_id: String,
+) -> Result<(), String> {
+    let session = {
+        let sessions = state.sessions.read();
+        sessions.get(&session_id).cloned()
+    };
+
+    let session = session.ok_or_else(|| "Session not found".to_string())?;
+    if let Some(tmux_target) = session.tmux_target {
+        return focus_tmux_target(&tmux_target).await;
+    }
+
+    // Hook-only sessions may be plain terminal processes, not tmux panes.
+    // In that case we can reliably focus the configured terminal app; exact
+    // tab selection depends on the terminal exposing a selectable tab API.
+    activate_terminal_app()
 }
 
 // Tauri command: Send action to session
@@ -1017,6 +1065,8 @@ struct HookNotification {
     hook_type: String,
     cwd: String,
     #[serde(default)]
+    terminal_tty: Option<String>,
+    #[serde(default)]
     agent_kind: Option<String>,
     #[serde(default)]
     session_id: Option<String>,
@@ -1132,6 +1182,8 @@ async fn handle_hook_request(
                     "id": s.id,
                     "project_path": s.project_path,
                     "agent_kind": s.agent_kind,
+                    "tmux_target": s.tmux_target,
+                    "terminal_tty": s.terminal_tty,
                     "state": format!("{:?}", s.state),
                     "project_name": s.project_name,
                 })
@@ -1382,6 +1434,7 @@ async fn handle_hook_request(
                 agent_kind: Some(agent_kind.clone()),
                 state: new_state.clone(),
                 tmux_target,
+                terminal_tty: notification.terminal_tty.clone(),
                 last_activity: Utc::now(),
                 pending_action,
                 metrics: None,
@@ -1431,6 +1484,9 @@ async fn handle_hook_request(
             session.last_activity = Utc::now();
             if session.agent_kind.is_none() || session.agent_kind.as_deref() == Some("unknown") {
                 session.agent_kind = Some(agent_kind.clone());
+            }
+            if session.terminal_tty.is_none() {
+                session.terminal_tty = notification.terminal_tty.clone();
             }
 
             // Set pending action for permission requests
@@ -1627,6 +1683,7 @@ pub fn run() {
             get_sessions,
             get_debug_info,
             focus_terminal,
+            focus_session,
             send_action,
             remove_session,
             close_pane,

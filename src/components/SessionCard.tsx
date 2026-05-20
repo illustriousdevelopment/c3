@@ -73,7 +73,7 @@ function truncateCommand(cmd: string | undefined, maxLength: number = 60): strin
 }
 
 export function SessionCard({ session, shortcut }: SessionCardProps) {
-  const focusTerminal = useSessionStore((state) => state.focusTerminal);
+  const focusSession = useSessionStore((state) => state.focusSession);
   const closePane = useSessionStore((state) => state.closePane);
   const selectSession = useSessionStore((state) => state.selectSession);
   const selectedSessionId = useSessionStore((state) => state.selectedSessionId);
@@ -130,9 +130,7 @@ export function SessionCard({ session, shortcut }: SessionCardProps) {
 
   const handleClick = () => {
     selectSession(session.id);
-    if (session.tmuxTarget) {
-      focusTerminal(session.tmuxTarget);
-    }
+    focusSession(session.id);
   };
 
   const handleClose = (e: React.MouseEvent) => {
@@ -246,10 +244,10 @@ export function SessionCard({ session, shortcut }: SessionCardProps) {
       </div>
 
       <div className="session-actions">
-        {isHovered && session.tmuxTarget && (
+        {isHovered && (session.tmuxTarget || session.terminalTty) && (
           <span className="session-tmux-badge">
             <Terminal size={10} />
-            {session.tmuxTarget}
+            {session.tmuxTarget || session.terminalTty}
           </span>
         )}
 

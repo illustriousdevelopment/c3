@@ -21,6 +21,7 @@ HOOK_DATA=$(cat)
 
 # Get the current working directory
 CWD=$(pwd)
+TERMINAL_TTY=$(tty 2>/dev/null || true)
 
 # Extract tool information if present
 TOOL_NAME=$(echo "$HOOK_DATA" | jq -r '.tool_name // .tool // empty' 2>/dev/null)
@@ -75,6 +76,7 @@ PAYLOAD=$(jq -n \
   --arg hook_type "$HOOK_TYPE" \
   --arg agent_kind "$AGENT_KIND" \
   --arg cwd "$CWD" \
+  --arg terminal_tty "$TERMINAL_TTY" \
   --arg session_id "$SESSION_ID" \
   --arg tool_name "$TOOL_NAME" \
   --argjson tool_input "${TOOL_INPUT:-null}" \
@@ -87,6 +89,7 @@ PAYLOAD=$(jq -n \
     hook_type: $hook_type,
     agent_kind: $agent_kind,
     cwd: $cwd,
+    terminal_tty: (if $terminal_tty == "" or $terminal_tty == "not a tty" then null else $terminal_tty end),
     session_id: (if $session_id == "" then null else $session_id end),
     tool_name: (if $tool_name == "" then null else $tool_name end),
     tool_input: $tool_input,

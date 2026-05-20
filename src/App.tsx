@@ -92,9 +92,7 @@ function App() {
       if (index < sessionList.length) {
         const session = sessionList[index];
         useSessionStore.getState().selectSession(session.id);
-        if (session.tmuxTarget) {
-          useSessionStore.getState().focusTerminal(session.tmuxTarget);
-        }
+        useSessionStore.getState().focusSession(session.id);
       }
       return;
     }

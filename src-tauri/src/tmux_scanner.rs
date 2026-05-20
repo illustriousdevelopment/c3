@@ -847,6 +847,7 @@ pub fn scan_tmux(state: &Arc<AppState>, app_handle: &AppHandle) {
             agent_kind: Some(pane.agent_kind.clone()),
             state: conv_state.state,
             tmux_target: Some(pane.target.clone()),
+            terminal_tty: None,
             last_activity,
             pending_action: conv_state.pending_action,
             metrics: None,

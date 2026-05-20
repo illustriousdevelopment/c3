@@ -32,6 +32,7 @@ interface SessionStore {
   // Tauri commands
   fetchSessions: () => Promise<void>;
   focusTerminal: (tmuxTarget: string) => Promise<void>;
+  focusSession: (sessionId: string) => Promise<void>;
   sendAction: (sessionId: string, action: string) => Promise<void>;
   closePane: (tmuxTarget: string) => Promise<void>;
   createNewTask: () => Promise<string>;
@@ -150,13 +151,10 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
   },
 
   focusSelectedSession: () => {
-    const { sessions, selectedSessionId, focusTerminal } = get();
+    const { selectedSessionId, focusSession } = get();
     if (!selectedSessionId) return;
 
-    const session = sessions[selectedSessionId];
-    if (session?.tmuxTarget) {
-      focusTerminal(session.tmuxTarget);
-    }
+    focusSession(selectedSessionId);
   },
 
   fetchSessions: async () => {
@@ -175,6 +173,14 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
       await invoke('focus_terminal', { tmuxTarget });
     } catch (e) {
       console.error('[C3] Failed to focus terminal:', e);
+    }
+  },
+
+  focusSession: async (sessionId) => {
+    try {
+      await invoke('focus_session', { sessionId });
+    } catch (e) {
+      console.error('[C3] Failed to focus session:', e);
     }
   },
 

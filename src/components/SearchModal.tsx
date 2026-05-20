@@ -112,7 +112,7 @@ export function SearchModal({ isOpen, onClose }: SearchModalProps) {
 
   const sessions = useSessionStore((state) => state.sessions);
   const sessionMeta = useSessionStore((state) => state.sessionMeta);
-  const focusTerminal = useSessionStore((state) => state.focusTerminal);
+  const focusSession = useSessionStore((state) => state.focusSession);
   const selectSession = useSessionStore((state) => state.selectSession);
 
   const sessionList = Object.values(sessions);
@@ -170,9 +170,7 @@ export function SearchModal({ isOpen, onClose }: SearchModalProps) {
 
   const handleSelect = (session: C3Session) => {
     selectSession(session.id);
-    if (session.tmuxTarget) {
-      focusTerminal(session.tmuxTarget);
-    }
+    focusSession(session.id);
     onClose();
   };
 
@@ -259,8 +257,8 @@ export function SearchModal({ isOpen, onClose }: SearchModalProps) {
                     )}
                   </div>
                   <div className="search-result-hint">
-                    {session.tmuxTarget && (
-                      <code>{session.tmuxTarget}</code>
+                    {(session.tmuxTarget || session.terminalTty) && (
+                      <code>{session.tmuxTarget || session.terminalTty}</code>
                     )}
                   </div>
                 </div>

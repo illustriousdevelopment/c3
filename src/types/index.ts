@@ -35,6 +35,7 @@ export interface C3Session {
   agentKind?: 'claude' | 'codex' | 'unknown';
   state: SessionState;
   tmuxTarget?: string;
+  terminalTty?: string;
   lastActivity: string;
   pendingAction?: PendingAction;
   metrics?: SessionMetrics;
