@@ -571,7 +571,7 @@ body {
 .session-state-badge {
   font-size: 10px;
   font-weight: 600;
-  letter-spacing: 0.5px;
+  letter-spacing: 0;
   text-transform: uppercase;
   padding: 3px 8px;
   border-radius: 4px;
@@ -582,6 +582,15 @@ body {
 
 .session-state-badge.state-awaiting_permission {
   background: rgba(220, 38, 38, 0.15);
+}
+
+.session-state-badge.state-complete {
+  min-width: 24px;
+  text-align: center;
+  font-size: 13px;
+  line-height: 1;
+  padding: 3px 7px;
+  background: rgba(5, 150, 105, 0.12);
 }
 
 .session-state-badge.state-processing,
@@ -631,6 +640,49 @@ body {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.session-path-track {
+  display: inline-block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  vertical-align: bottom;
+}
+
+.session-path-text {
+  display: inline-block;
+}
+
+.session-path-text.duplicate {
+  display: none;
+}
+
+.session-card.selected .session-path {
+  color: var(--text-secondary);
+  text-overflow: clip;
+}
+
+.session-card.selected .session-path-track {
+  display: inline-flex;
+  max-width: none;
+  min-width: max-content;
+  gap: 32px;
+  animation: selected-path-marquee 14s linear infinite;
+  will-change: transform;
+}
+
+.session-card.selected .session-path-text.duplicate {
+  display: inline-block;
+}
+
+@keyframes selected-path-marquee {
+  from {
+    transform: translateX(0);
+  }
+  to {
+    transform: translateX(calc(-50% - 16px));
+  }
 }
 
 .session-time {

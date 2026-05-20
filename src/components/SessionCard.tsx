@@ -47,7 +47,7 @@ function getStateLabel(state: string): string {
     case 'spawning':
       return 'Working';
     case 'complete':
-      return 'Complete';
+      return '✓';
     case 'error':
       return 'Error';
     default:
@@ -173,6 +173,9 @@ export function SessionCard({ session, shortcut }: SessionCardProps) {
   const lastActivityMs = new Date().getTime() - new Date(session.lastActivity).getTime();
   const isRecentlyActive = lastActivityMs < 30000;
   const isStale = lastActivityMs > 3600000;
+  const pathLabel = session.projectPath
+    ? (isSelected ? session.projectPath : truncatePath(session.projectPath))
+    : '';
 
   return (
     <div
@@ -212,6 +215,7 @@ export function SessionCard({ session, shortcut }: SessionCardProps) {
             <span
               className={`session-state-badge state-${session.state}`}
               style={{ borderColor: color, color: color }}
+              title={session.state === 'complete' ? 'Complete' : undefined}
             >
               {getStateLabel(session.state)}
             </span>
@@ -221,7 +225,12 @@ export function SessionCard({ session, shortcut }: SessionCardProps) {
         <div className="session-meta">
           {session.projectPath && (
             <span className="session-path" title={session.projectPath}>
-              {truncatePath(session.projectPath)}
+              <span className="session-path-track">
+                <span className="session-path-text">{pathLabel}</span>
+                {isSelected && (
+                  <span className="session-path-text duplicate">{pathLabel}</span>
+                )}
+              </span>
             </span>
           )}
           <span className={`session-time ${isRecentlyActive ? 'recent' : ''}`}>
@@ -243,7 +252,7 @@ export function SessionCard({ session, shortcut }: SessionCardProps) {
       </div>
 
       <div className="session-actions">
-        {isHovered && (session.tmuxTarget || session.terminalTty) && (
+        {isHovered && !isSelected && (session.tmuxTarget || session.terminalTty) && (
           <span className="session-tmux-badge">
             <Terminal size={10} />
             {session.tmuxTarget || session.terminalTty}
