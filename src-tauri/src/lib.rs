@@ -486,6 +486,81 @@ async fn focus_tmux_target(tmux_target: &str) -> Result<(), String> {
     Ok(())
 }
 
+fn normalize_tty(tty: &str) -> String {
+    tty.strip_prefix("/dev/").unwrap_or(tty).trim().to_string()
+}
+
+fn infer_tmux_target(project_path: Option<&str>, terminal_tty: Option<&str>) -> Option<String> {
+    let output = cmd("tmux")
+        .args([
+            "list-panes",
+            "-a",
+            "-F",
+            "#{session_name}:#{window_index}.#{pane_index}\t#{pane_tty}\t#{pane_current_path}",
+        ])
+        .output()
+        .ok()?;
+
+    if !output.status.success() {
+        return None;
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let panes: Vec<(String, String, String)> = stdout
+        .lines()
+        .filter_map(|line| {
+            let parts: Vec<&str> = line.split('\t').collect();
+            if parts.len() < 3 {
+                return None;
+            }
+            Some((parts[0].to_string(), normalize_tty(parts[1]), parts[2].to_string()))
+        })
+        .collect();
+
+    if let Some(tty) = terminal_tty {
+        let tty = normalize_tty(tty);
+        if let Some((target, _, _)) = panes.iter().find(|(_, pane_tty, _)| *pane_tty == tty) {
+            return Some(target.clone());
+        }
+    }
+
+    let project_path = project_path?;
+    let cwd_matches: Vec<&(String, String, String)> = panes
+        .iter()
+        .filter(|(_, _, cwd)| cwd == project_path)
+        .collect();
+    if cwd_matches.len() == 1 {
+        return Some(cwd_matches[0].0.clone());
+    }
+
+    None
+}
+
+async fn focus_session_id(state: Arc<AppState>, session_id: String) -> Result<(), String> {
+    let session = {
+        let sessions = state.sessions.read();
+        sessions.get(&session_id).cloned()
+    };
+
+    let mut session = session.ok_or_else(|| "Session not found".to_string())?;
+    let tmux_target = session.tmux_target.clone().or_else(|| {
+        infer_tmux_target(session.project_path.as_deref(), session.terminal_tty.as_deref())
+    });
+
+    if let Some(tmux_target) = tmux_target {
+        if session.tmux_target.is_none() {
+            session.tmux_target = Some(tmux_target.clone());
+            state.sessions.write().insert(session_id, session);
+        }
+        return focus_tmux_target(&tmux_target).await;
+    }
+
+    // Hook-only sessions may be plain terminal processes, not tmux panes.
+    // In that case we can reliably focus the configured terminal app; exact
+    // tab selection depends on the terminal exposing a selectable tab API.
+    activate_terminal_app()
+}
+
 fn configured_terminal() -> String {
     let settings = load_settings();
     if settings.terminal_app == "auto" {
@@ -510,20 +585,7 @@ async fn focus_session(
     state: tauri::State<'_, Arc<AppState>>,
     session_id: String,
 ) -> Result<(), String> {
-    let session = {
-        let sessions = state.sessions.read();
-        sessions.get(&session_id).cloned()
-    };
-
-    let session = session.ok_or_else(|| "Session not found".to_string())?;
-    if let Some(tmux_target) = session.tmux_target {
-        return focus_tmux_target(&tmux_target).await;
-    }
-
-    // Hook-only sessions may be plain terminal processes, not tmux panes.
-    // In that case we can reliably focus the configured terminal app; exact
-    // tab selection depends on the terminal exposing a selectable tab API.
-    activate_terminal_app()
+    focus_session_id(state.inner().clone(), session_id).await
 }
 
 // Tauri command: Send action to session
@@ -1098,6 +1160,7 @@ fn send_os_notification(
     title: &str,
     subtitle: &str,
     tmux: &Option<TmuxContext>,
+    session_id: Option<&str>,
 ) {
     let mut notifier = cmd("terminal-notifier");
     notifier.arg("-message").arg(message)
@@ -1112,8 +1175,14 @@ fn send_os_notification(
         notifier.arg("-contentImage").arg(&icon_path);
     }
 
-    // If we have tmux context, set up click-to-focus
-    if let Some(tmux_ctx) = tmux {
+    // Route notification clicks back through C3 so they use the same focus
+    // logic as session cards, including inferred tmux targets.
+    if let Some(session_id) = session_id {
+        notifier.arg("-execute").arg(format!(
+            "curl -fsS {} >/dev/null 2>&1",
+            shell_quote(&format!("http://127.0.0.1:9398/focus/{}", session_id)),
+        ));
+    } else if let Some(tmux_ctx) = tmux {
         if !tmux_ctx.session.is_empty() && !tmux_ctx.window.is_empty() {
             let settings = load_settings();
             let terminal = if settings.terminal_app == "auto" {
@@ -1193,6 +1262,39 @@ async fn handle_hook_request(
         let response = format!(
             "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
             body.len(), body
+        );
+        let _ = stream.write_all(response.as_bytes()).await;
+        return;
+    }
+
+    // Handle GET /focus/<session_id> for notification click callbacks.
+    if request_line.starts_with("GET /focus/") {
+        let path = request_line
+            .split_whitespace()
+            .nth(1)
+            .unwrap_or_default();
+        let session_id = path
+            .strip_prefix("/focus/")
+            .unwrap_or_default()
+            .to_string();
+
+        // Drain headers
+        loop {
+            let mut header = String::new();
+            if reader.read_line(&mut header).await.is_err() { return; }
+            if header == "\r\n" || header == "\n" { break; }
+        }
+
+        let result = focus_session_id(state.clone(), session_id).await;
+        let (status, body) = match result {
+            Ok(_) => ("200 OK", "focused".to_string()),
+            Err(e) => ("404 Not Found", e),
+        };
+        let response = format!(
+            "HTTP/1.1 {}\r\nContent-Length: {}\r\n\r\n{}",
+            status,
+            body.len(),
+            body
         );
         let _ = stream.write_all(response.as_bytes()).await;
         return;
@@ -1385,6 +1487,11 @@ async fn handle_hook_request(
             } else {
                 None
             }
+        }).or_else(|| {
+            infer_tmux_target(
+                Some(&notification.cwd),
+                notification.terminal_tty.as_deref(),
+            )
         });
         let fallback_hook_id = notification
             .session_id
@@ -1487,6 +1594,21 @@ async fn handle_hook_request(
             }
             if session.terminal_tty.is_none() {
                 session.terminal_tty = notification.terminal_tty.clone();
+            }
+            if session.tmux_target.is_none() {
+                session.tmux_target = notification.tmux.as_ref().and_then(|tmux_ctx| {
+                    if !tmux_ctx.session.is_empty() && !tmux_ctx.window.is_empty() {
+                        let pane = if tmux_ctx.pane.is_empty() { "0" } else { &tmux_ctx.pane };
+                        Some(format!("{}:{}.{}", tmux_ctx.session, tmux_ctx.window, pane))
+                    } else {
+                        None
+                    }
+                }).or_else(|| {
+                    infer_tmux_target(
+                        Some(&notification.cwd),
+                        notification.terminal_tty.as_deref(),
+                    )
+                });
             }
 
             // Set pending action for permission requests
@@ -1616,6 +1738,7 @@ async fn handle_hook_request(
             &title,
             &subtitle,
             &notification.tmux,
+            session_id.as_deref(),
         );
     }
 
