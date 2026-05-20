@@ -1,6 +1,6 @@
 #!/bin/bash
 # C3 Setup Script
-# Installs hooks and checks dependencies for C3 (Agent Command Center)
+# Installs hooks and checks dependencies for C3 (Carmelo Command Center)
 #
 # Usage:
 #   ./setup.sh
@@ -21,7 +21,7 @@ warn()  { echo -e "${YELLOW}[warn]${NC} $1"; }
 fail()  { echo -e "${RED}[error]${NC} $1"; }
 
 echo ""
-echo -e "${BLUE}C3${NC} — Agent Command Center Setup"
+echo -e "${BLUE}C3${NC} — Carmelo Command Center Setup"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo ""
 

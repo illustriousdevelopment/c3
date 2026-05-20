@@ -2,7 +2,7 @@
   <img src="public/logo.png" width="80" alt="C3 logo" />
 </p>
 
-# C3 — Agent Command Center
+# C3 — Carmelo Command Center
 
 C3 is a visualizer for Claude Code and Codex terminal sessions running in tmux.
 

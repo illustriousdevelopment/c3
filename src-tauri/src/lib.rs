@@ -1108,6 +1108,52 @@ async fn close_pane(
     }
 }
 
+// Tauri command: Kill the terminal/pane for a known session
+#[tauri::command]
+async fn kill_session(
+    state: tauri::State<'_, Arc<AppState>>,
+    app_handle: AppHandle,
+    session_id: String,
+) -> Result<(), String> {
+    let session = {
+        let sessions = state.sessions.read();
+        sessions.get(&session_id).cloned()
+    }
+    .ok_or_else(|| "Session not found".to_string())?;
+
+    let tmux_target = session.tmux_target.clone().or_else(|| {
+        infer_tmux_target(session.project_path.as_deref(), session.terminal_tty.as_deref())
+    });
+    let tmux_target = tmux_target.ok_or_else(|| {
+        "No tmux target found for this session. C3 can only kill tmux-backed terminals."
+            .to_string()
+    })?;
+
+    let result = cmd("tmux")
+        .args(["kill-pane", "-t", &tmux_target])
+        .output();
+
+    match result {
+        Ok(output) if output.status.success() => {
+            let tmux_session_id = format!("tmux:{}", tmux_target);
+            let mut sessions = state.sessions.write();
+            sessions.remove(&session_id);
+            sessions.remove(&tmux_session_id);
+            drop(sessions);
+            let _ = app_handle.emit("session-removed", session_id);
+            if tmux_session_id != session.id {
+                let _ = app_handle.emit("session-removed", tmux_session_id);
+            }
+            Ok(())
+        }
+        Ok(output) => {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            Err(format!("Failed to kill terminal: {}", stderr))
+        }
+        Err(e) => Err(format!("Failed to execute tmux: {}", e)),
+    }
+}
+
 // Tmux context from hook
 #[derive(Debug, Clone, Deserialize, Default)]
 struct TmuxContext {
@@ -1810,6 +1856,7 @@ pub fn run() {
             send_action,
             remove_session,
             close_pane,
+            kill_session,
             play_sound,
             get_settings,
             update_settings,

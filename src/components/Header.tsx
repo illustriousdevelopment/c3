@@ -53,7 +53,7 @@ export function Header({ onSearchClick, onSettingsClick }: HeaderProps) {
     <header className="header" onMouseDown={handleDragStart}>
       <div className="header-left">
         <h1 className="logo">C3</h1>
-        <span className="tagline">Agent Command Center</span>
+        <span className="tagline">Carmelo Command Center</span>
       </div>
       <div className="header-right">
         <button className="search-button" onClick={onSearchClick}>

@@ -74,7 +74,7 @@ function truncateCommand(cmd: string | undefined, maxLength: number = 60): strin
 
 export function SessionCard({ session, shortcut }: SessionCardProps) {
   const focusSession = useSessionStore((state) => state.focusSession);
-  const closePane = useSessionStore((state) => state.closePane);
+  const requestKillSession = useSessionStore((state) => state.requestKillSession);
   const selectSession = useSessionStore((state) => state.selectSession);
   const selectedSessionId = useSessionStore((state) => state.selectedSessionId);
   const sessionMeta = useSessionStore((state) => state.sessionMeta);
@@ -135,9 +135,8 @@ export function SessionCard({ session, shortcut }: SessionCardProps) {
 
   const handleClose = (e: React.MouseEvent) => {
     e.stopPropagation();
-    if (session.tmuxTarget) {
-      closePane(session.tmuxTarget);
-    }
+    setMenuOpen(false);
+    requestKillSession(session.id);
   };
 
   const handleMenuToggle = (e: React.MouseEvent) => {
@@ -288,12 +287,10 @@ export function SessionCard({ session, shortcut }: SessionCardProps) {
                     {isPinned ? <PinOff size={14} /> : <Pin size={14} />}
                     <span>{isPinned ? 'Unpin' : 'Pin'}</span>
                   </button>
-                  {session.tmuxTarget && (
-                    <button className="session-menu-item danger" onClick={handleClose}>
-                      <Trash2 size={14} />
-                      <span>Close session</span>
-                    </button>
-                  )}
+                  <button className="session-menu-item danger" onClick={handleClose}>
+                    <Trash2 size={14} />
+                    <span>Kill terminal</span>
+                  </button>
                 </>
               )}
             </div>

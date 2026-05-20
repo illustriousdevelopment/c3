@@ -9,7 +9,8 @@ const SHORTCUTS = [
   { keys: ['j', 'k'], description: 'Navigate sessions (vim)' },
   { keys: ['↵'], description: 'Focus selected session' },
   { keys: ['1-9'], description: 'Quick access to session' },
-  { keys: ['⌫'], description: 'Close completed session' },
+  { keys: ['X'], description: 'Kill selected terminal' },
+  { keys: ['⇧', 'X'], description: 'Kill without confirmation' },
   { keys: ['?'], description: 'Show keyboard shortcuts' },
   { keys: ['esc'], description: 'Deselect / Close modal' },
 ];

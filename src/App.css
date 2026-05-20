@@ -1,4 +1,4 @@
-/* C3 - Claude Command Center Styles */
+/* C3 - Carmelo Command Center Styles */
 
 :root {
   --bg-primary: #0a0a0f;
@@ -1291,6 +1291,125 @@ body {
   border: 1px solid var(--border-color);
   border-radius: 3px;
   margin: 0 4px;
+}
+
+/* Kill Confirmation Modal */
+.kill-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.62);
+  backdrop-filter: blur(4px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1200;
+  animation: overlay-fade-in 0.15s ease;
+}
+
+.kill-modal {
+  width: 420px;
+  max-width: calc(100vw - 32px);
+  background: var(--bg-secondary);
+  border: 1px solid rgba(239, 68, 68, 0.35);
+  border-radius: 10px;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.55);
+  overflow: hidden;
+  animation: modal-slide-in 0.2s ease;
+}
+
+.kill-header {
+  display: flex;
+  gap: 12px;
+  padding: 18px 20px;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.kill-icon {
+  width: 34px;
+  height: 34px;
+  border-radius: 8px;
+  background: rgba(239, 68, 68, 0.15);
+  color: var(--accent-red);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.kill-header h2 {
+  font-size: 15px;
+  font-weight: 650;
+  color: var(--text-primary);
+  margin: 0 0 5px;
+}
+
+.kill-header p {
+  font-size: 13px;
+  color: var(--text-secondary);
+  margin: 0;
+  line-height: 1.4;
+}
+
+.kill-body {
+  padding: 16px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.kill-session-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.kill-body code {
+  font-size: 12px;
+  color: var(--text-muted);
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  padding: 7px 8px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.kill-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  padding: 14px 20px 18px;
+}
+
+.kill-btn {
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  padding: 8px 14px;
+  font-size: 13px;
+  font-family: inherit;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.kill-btn.secondary {
+  background: var(--bg-tertiary);
+  color: var(--text-secondary);
+}
+
+.kill-btn.secondary:hover {
+  color: var(--text-primary);
+  border-color: var(--text-muted);
+}
+
+.kill-btn.danger {
+  background: var(--accent-red);
+  border-color: var(--accent-red);
+  color: white;
+}
+
+.kill-btn.danger:hover {
+  filter: brightness(1.08);
 }
 
 /* Settings Modal */

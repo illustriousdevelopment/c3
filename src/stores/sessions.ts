@@ -8,6 +8,7 @@ interface SessionStore {
   sessions: Record<string, C3Session>;
   sessionMeta: Record<string, SessionMeta>;
   selectedSessionId: string | null;
+  pendingKillSessionId: string | null;
   isConnected: boolean;
   notificationsEnabled: boolean;
 
@@ -16,6 +17,8 @@ interface SessionStore {
   updateSession: (session: C3Session) => void;
   removeSession: (sessionId: string) => void;
   selectSession: (sessionId: string | null) => void;
+  requestKillSession: (sessionId: string) => void;
+  clearKillRequest: () => void;
   setConnected: (connected: boolean) => void;
   setNotificationsEnabled: (enabled: boolean) => void;
 
@@ -35,6 +38,7 @@ interface SessionStore {
   focusSession: (sessionId: string) => Promise<void>;
   sendAction: (sessionId: string, action: string) => Promise<void>;
   closePane: (tmuxTarget: string) => Promise<void>;
+  killSession: (sessionId: string) => Promise<void>;
   createNewTask: () => Promise<string>;
 }
 
@@ -45,6 +49,7 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
   sessions: {},
   sessionMeta: {},
   selectedSessionId: null,
+  pendingKillSessionId: null,
   isConnected: false,
   notificationsEnabled: true,
 
@@ -70,12 +75,24 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
     delete previousStates[sessionId];
     set((state) => {
       const { [sessionId]: _, ...rest } = state.sessions;
-      return { sessions: rest };
+      return {
+        sessions: rest,
+        selectedSessionId: state.selectedSessionId === sessionId ? null : state.selectedSessionId,
+        pendingKillSessionId: state.pendingKillSessionId === sessionId ? null : state.pendingKillSessionId,
+      };
     });
   },
 
   selectSession: (sessionId) => {
     set({ selectedSessionId: sessionId });
+  },
+
+  requestKillSession: (sessionId) => {
+    set({ pendingKillSessionId: sessionId });
+  },
+
+  clearKillRequest: () => {
+    set({ pendingKillSessionId: null });
   },
 
   setConnected: (connected) => {
@@ -197,6 +214,15 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
       await invoke('close_pane', { tmuxTarget });
     } catch (e) {
       console.error('[C3] Failed to close pane:', e);
+    }
+  },
+
+  killSession: async (sessionId) => {
+    try {
+      await invoke('kill_session', { sessionId });
+      get().clearKillRequest();
+    } catch (e) {
+      console.error('[C3] Failed to kill session:', e);
     }
   },
 

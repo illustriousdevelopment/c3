@@ -1,7 +1,7 @@
 [package]
 name = "c3"
 version = "0.2.9-20260418-1"
-description = "Claude Command Center - Visual session manager"
+description = "Carmelo Command Center - Visual session manager"
 authors = ["jonpatterson"]
 edition = "2021"
 
@@ -32,4 +32,3 @@ env_logger = "0.11"
 [target.'cfg(target_os = "macos")'.dependencies]
 cocoa = "0.26"
 objc = "0.2"
-

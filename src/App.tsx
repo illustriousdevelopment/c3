@@ -6,6 +6,7 @@ import { SearchModal } from './components/SearchModal';
 import { KeyboardHints } from './components/KeyboardHints';
 import { SettingsModal } from './components/SettingsModal';
 import { DebugPanel } from './components/DebugPanel';
+import { KillSessionModal } from './components/KillSessionModal';
 import { initializeSessionListeners, useSessionStore } from './stores/sessions';
 import { getVisualSessionOrder } from './types';
 import './App.css';
@@ -16,9 +17,12 @@ function App() {
   const selectPrevSession = useSessionStore((state) => state.selectPrevSession);
   const focusSelectedSession = useSessionStore((state) => state.focusSelectedSession);
   const selectedSessionId = useSessionStore((state) => state.selectedSessionId);
+  const pendingKillSessionId = useSessionStore((state) => state.pendingKillSessionId);
   const sessions = useSessionStore((state) => state.sessions);
   const sessionMeta = useSessionStore((state) => state.sessionMeta);
-  const closePane = useSessionStore((state) => state.closePane);
+  const requestKillSession = useSessionStore((state) => state.requestKillSession);
+  const clearKillRequest = useSessionStore((state) => state.clearKillRequest);
+  const killSession = useSessionStore((state) => state.killSession);
 
   const [isSearchOpen, setIsSearchOpen] = useState(false);
   const [showKeyboardHints, setShowKeyboardHints] = useState(false);
@@ -41,6 +45,14 @@ function App() {
   const handleKeyDown = useCallback((e: KeyboardEvent) => {
     // Don't handle shortcuts when search is open (it has its own handlers)
     if (isSearchOpen) return;
+
+    if (pendingKillSessionId) {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        clearKillRequest();
+      }
+      return;
+    }
 
     // Don't handle if focus is in an input
     if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) {
@@ -74,12 +86,23 @@ function App() {
       return;
     }
 
-    // Delete/Backspace to close completed session
+    // X to kill selected session terminal. Shift+X bypasses confirmation.
+    if ((e.key === 'x' || e.key === 'X') && selectedSessionId && !e.metaKey && !e.ctrlKey) {
+      e.preventDefault();
+      if (e.shiftKey || e.key === 'X') {
+        killSession(selectedSessionId);
+      } else {
+        requestKillSession(selectedSessionId);
+      }
+      return;
+    }
+
+    // Delete/Backspace to request closing completed session
     if ((e.key === 'Delete' || e.key === 'Backspace') && selectedSessionId) {
       const session = sessions[selectedSessionId];
-      if (session?.state === 'complete' && session.tmuxTarget) {
+      if (session?.state === 'complete') {
         e.preventDefault();
-        closePane(session.tmuxTarget);
+        requestKillSession(selectedSessionId);
       }
       return;
     }
@@ -120,7 +143,7 @@ function App() {
       }
       return;
     }
-  }, [isSearchOpen, selectNextSession, selectPrevSession, focusSelectedSession, selectedSessionId, sessions, sessionMeta, closePane, showKeyboardHints]);
+  }, [isSearchOpen, pendingKillSessionId, clearKillRequest, selectNextSession, selectPrevSession, focusSelectedSession, selectedSessionId, sessions, sessionMeta, requestKillSession, killSession, showKeyboardHints]);
 
   useEffect(() => {
     window.addEventListener('keydown', handleKeyDown);
@@ -141,6 +164,15 @@ function App() {
       <KeyboardHints isOpen={showKeyboardHints} onClose={() => setShowKeyboardHints(false)} />
       <SettingsModal isOpen={showSettings} onClose={() => setShowSettings(false)} />
       <DebugPanel isOpen={showDebug} onClose={() => setShowDebug(false)} />
+      <KillSessionModal
+        session={pendingKillSessionId ? sessions[pendingKillSessionId] || null : null}
+        onCancel={clearKillRequest}
+        onConfirm={() => {
+          if (pendingKillSessionId) {
+            killSession(pendingKillSessionId);
+          }
+        }}
+      />
     </div>
   );
 }
