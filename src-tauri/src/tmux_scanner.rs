@@ -595,9 +595,13 @@ pub fn scan_tmux(state: &Arc<AppState>, app_handle: &AppHandle) {
 
         let (changed, last_activity) = match existing {
             Some(prev) if prev.state == conv_state.state => {
-                // No state change — still update last_activity from JSONL timestamp
-                // so sorting reflects actual conversation recency
-                (false, jsonl_activity)
+                if conv_state.state == SessionState::Complete {
+                    // Complete sessions: freeze last_activity so they don't re-sort
+                    (false, prev.last_activity)
+                } else {
+                    // Active sessions: update from JSONL so sorting reflects recency
+                    (false, jsonl_activity)
+                }
             }
             Some(_) => {
                 // State changed

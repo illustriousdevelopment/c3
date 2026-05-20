@@ -2,6 +2,7 @@ import { create } from 'zustand';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import type { C3Session, SessionMeta, SessionMetaStore, AppSettings, SoundConfig } from '../types';
+import { getVisualSessionOrder } from '../types';
 
 interface SessionStore {
   sessions: Record<string, C3Session>;
@@ -129,8 +130,8 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
 
   // Keyboard navigation
   selectNextSession: () => {
-    const { sessions, selectedSessionId } = get();
-    const sessionList = Object.values(sessions);
+    const { sessions, sessionMeta, selectedSessionId } = get();
+    const sessionList = getVisualSessionOrder(Object.values(sessions), sessionMeta);
     if (sessionList.length === 0) return;
 
     const currentIndex = sessionList.findIndex((s) => s.id === selectedSessionId);
@@ -139,8 +140,8 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
   },
 
   selectPrevSession: () => {
-    const { sessions, selectedSessionId } = get();
-    const sessionList = Object.values(sessions);
+    const { sessions, sessionMeta, selectedSessionId } = get();
+    const sessionList = getVisualSessionOrder(Object.values(sessions), sessionMeta);
     if (sessionList.length === 0) return;
 
     const currentIndex = sessionList.findIndex((s) => s.id === selectedSessionId);

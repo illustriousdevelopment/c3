@@ -5,9 +5,10 @@ import type { C3Session } from '../types';
 
 interface PinnedLaneProps {
   sessions: C3Session[];
+  shortcutMap?: Record<string, number>;
 }
 
-export function PinnedLane({ sessions }: PinnedLaneProps) {
+export function PinnedLane({ sessions, shortcutMap = {} }: PinnedLaneProps) {
   const storageKey = 'c3-lane-collapsed-pinned';
   const [isCollapsed, setIsCollapsed] = useState(() => {
     const stored = localStorage.getItem(storageKey);
@@ -49,7 +50,7 @@ export function PinnedLane({ sessions }: PinnedLaneProps) {
       {!isCollapsed && (
         <div className="lane-content">
           {sortedSessions.map((session) => (
-            <SessionCard key={session.id} session={session} />
+            <SessionCard key={session.id} session={session} shortcut={shortcutMap[session.id]} />
           ))}
         </div>
       )}

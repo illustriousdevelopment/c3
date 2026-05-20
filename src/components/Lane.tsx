@@ -15,6 +15,7 @@ import type { C3Session, Lane as LaneType } from '../types';
 interface LaneProps {
   lane: LaneType;
   sessions: C3Session[];
+  shortcutMap?: Record<string, number>;
 }
 
 const LANE_ICONS: Record<string, React.ReactNode> = {
@@ -26,7 +27,7 @@ const LANE_ICONS: Record<string, React.ReactNode> = {
   Pin: <Pin size={16} />,
 };
 
-export function Lane({ lane, sessions }: LaneProps) {
+export function Lane({ lane, sessions, shortcutMap = {} }: LaneProps) {
   const storageKey = `c3-lane-collapsed-${lane.id}`;
   const [isCollapsed, setIsCollapsed] = useState(() => {
     const stored = localStorage.getItem(storageKey);
@@ -70,7 +71,7 @@ export function Lane({ lane, sessions }: LaneProps) {
       {!isCollapsed && (
         <div className="lane-content">
           {filteredSessions.map((session) => (
-            <SessionCard key={session.id} session={session} />
+            <SessionCard key={session.id} session={session} shortcut={shortcutMap[session.id]} />
           ))}
         </div>
       )}

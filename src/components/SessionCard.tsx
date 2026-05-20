@@ -6,6 +6,7 @@ import { STATE_COLORS } from '../types';
 
 interface SessionCardProps {
   session: C3Session;
+  shortcut?: number;
 }
 
 function formatTimeAgo(dateString: string): string {
@@ -60,7 +61,7 @@ function truncateCommand(cmd: string | undefined, maxLength: number = 60): strin
   return cmd.slice(0, maxLength - 3) + '...';
 }
 
-export function SessionCard({ session }: SessionCardProps) {
+export function SessionCard({ session, shortcut }: SessionCardProps) {
   const focusTerminal = useSessionStore((state) => state.focusTerminal);
   const closePane = useSessionStore((state) => state.closePane);
   const selectSession = useSessionStore((state) => state.selectSession);
@@ -174,6 +175,9 @@ export function SessionCard({ session }: SessionCardProps) {
       onMouseEnter={() => setIsHovered(true)}
       onMouseLeave={() => setIsHovered(false)}
     >
+      {shortcut && (
+        <span className="session-shortcut">{shortcut}</span>
+      )}
       <div
         className={`session-indicator ${isProcessing ? 'processing' : ''} ${isPermission ? 'permission' : ''}`}
         style={{ backgroundColor: color }}

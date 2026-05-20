@@ -7,6 +7,7 @@ import { KeyboardHints } from './components/KeyboardHints';
 import { SettingsModal } from './components/SettingsModal';
 import { DebugPanel } from './components/DebugPanel';
 import { initializeSessionListeners, useSessionStore } from './stores/sessions';
+import { getVisualSessionOrder } from './types';
 import './App.css';
 
 function App() {
@@ -16,6 +17,7 @@ function App() {
   const focusSelectedSession = useSessionStore((state) => state.focusSelectedSession);
   const selectedSessionId = useSessionStore((state) => state.selectedSessionId);
   const sessions = useSessionStore((state) => state.sessions);
+  const sessionMeta = useSessionStore((state) => state.sessionMeta);
   const closePane = useSessionStore((state) => state.closePane);
 
   const [isSearchOpen, setIsSearchOpen] = useState(false);
@@ -82,10 +84,10 @@ function App() {
       return;
     }
 
-    // Number keys 1-9 for quick access
+    // Number keys 1-9 for quick access (matches visual order)
     if (e.key >= '1' && e.key <= '9' && !e.metaKey && !e.ctrlKey) {
       e.preventDefault();
-      const sessionList = Object.values(sessions);
+      const sessionList = getVisualSessionOrder(Object.values(sessions), sessionMeta);
       const index = parseInt(e.key) - 1;
       if (index < sessionList.length) {
         const session = sessionList[index];
@@ -120,7 +122,7 @@ function App() {
       }
       return;
     }
-  }, [isSearchOpen, selectNextSession, selectPrevSession, focusSelectedSession, selectedSessionId, sessions, closePane, showKeyboardHints]);
+  }, [isSearchOpen, selectNextSession, selectPrevSession, focusSelectedSession, selectedSessionId, sessions, sessionMeta, closePane, showKeyboardHints]);
 
   useEffect(() => {
     window.addEventListener('keydown', handleKeyDown);

@@ -505,6 +505,19 @@ body {
   50% { opacity: 0.7; box-shadow: 0 0 4px currentColor; }
 }
 
+/* Shortcut number badge */
+.session-shortcut {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  flex-shrink: 0;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--text-tertiary);
+  font-family: var(--font-mono, monospace);
+}
+
 /* Session content */
 .session-content {
   flex: 1;

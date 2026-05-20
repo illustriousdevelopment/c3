@@ -448,27 +448,21 @@ async fn focus_terminal(tmux_target: String) -> Result<(), String> {
     // Small delay to let terminal focus
     tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
 
-    // Select tmux window
-    let window_result = cmd("tmux")
+    let target = format!("{}:{}.{}", session, window, pane);
+
+    // Switch the client to the target session (needed when pane is in a different tmux session)
+    let _ = cmd("tmux")
+        .args(["switch-client", "-t", &target])
+        .output();
+
+    // Select the window and pane
+    let _ = cmd("tmux")
         .args(["select-window", "-t", &format!("{}:{}", session, window)])
         .output();
 
-    if let Err(e) = window_result {
-        return Err(format!("Failed to select tmux window: {}", e));
-    }
-
-    // Select tmux pane
-    let pane_result = cmd("tmux")
-        .args([
-            "select-pane",
-            "-t",
-            &format!("{}:{}.{}", session, window, pane),
-        ])
+    let _ = cmd("tmux")
+        .args(["select-pane", "-t", &target])
         .output();
-
-    if let Err(e) = pane_result {
-        return Err(format!("Failed to select tmux pane: {}", e));
-    }
 
     Ok(())
 }
@@ -535,10 +529,13 @@ async fn create_new_task() -> Result<String, String> {
         .unwrap_or("0")
         .to_string();
 
-    // Create a new window in the attached session, starting in the user's home directory
+    // Create a new window in the attached session, starting in the user's home directory.
+    // Trailing colon means "this session, auto-assign window index" — without it,
+    // tmux interprets the bare name as a window index and fails with "index in use".
     let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
+    let target_session = format!("{}:", session_name);
     let create_window = cmd("tmux")
-        .args(["new-window", "-t", &session_name, "-c", &home, "-P", "-F", "#{session_name}:#{window_index}.#{pane_index}"])
+        .args(["new-window", "-t", &target_session, "-c", &home, "-P", "-F", "#{session_name}:#{window_index}.#{pane_index}"])
         .output()
         .map_err(|e| format!("Failed to create window: {}", e))?;
 

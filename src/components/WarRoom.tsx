@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { useSessionStore } from '../stores/sessions';
 import { Lane } from './Lane';
 import { PinnedLane } from './PinnedLane';
-import { LANES, SessionState, STATE_COLORS } from '../types';
+import { LANES, SessionState, STATE_COLORS, getVisualSessionOrder } from '../types';
 
 type FilterOption = 'all' | 'pinned' | SessionState;
 
@@ -20,6 +20,13 @@ export function WarRoom() {
   const [activeFilter, setActiveFilter] = useState<FilterOption>('all');
 
   const sessionList = Object.values(sessions);
+
+  // Build a map of session ID → shortcut number (1-9) based on visual order
+  const visualOrder = getVisualSessionOrder(sessionList, sessionMeta);
+  const shortcutMap: Record<string, number> = {};
+  visualOrder.forEach((s, i) => {
+    if (i < 9) shortcutMap[s.id] = i + 1;
+  });
 
   // Get pinned sessions
   const pinnedSessions = sessionList.filter((s) => sessionMeta[s.id]?.pinned);
@@ -97,7 +104,7 @@ export function WarRoom() {
 
       {/* Pinned Lane - always at top when not filtering by other criteria */}
       {(activeFilter === 'all' || activeFilter === 'pinned') && pinnedSessions.length > 0 && (
-        <PinnedLane sessions={pinnedSessions} />
+        <PinnedLane sessions={pinnedSessions} shortcutMap={shortcutMap} />
       )}
 
       {/* Regular Lanes — exclude pinned sessions to avoid duplication */}
@@ -105,7 +112,7 @@ export function WarRoom() {
         const laneSessions = (activeFilter === 'all')
           ? filteredSessions.filter((s) => !sessionMeta[s.id]?.pinned)
           : filteredSessions;
-        return <Lane key={lane.id} lane={lane} sessions={laneSessions} />;
+        return <Lane key={lane.id} lane={lane} sessions={laneSessions} shortcutMap={shortcutMap} />;
       })}
 
       {/* No results message when filtering */}

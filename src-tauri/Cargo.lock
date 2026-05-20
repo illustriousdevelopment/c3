@@ -377,7 +377,7 @@ dependencies = [
 
 [[package]]
 name = "c3"
-version = "0.2.7"
+version = "0.2.9-20260418-1"
 dependencies = [
  "chrono",
  "cocoa",

@@ -113,6 +113,33 @@ export const LANES: Lane[] = [
   },
 ];
 
+/**
+ * Compute the visual session order matching what the UI renders:
+ * Pinned (by recency) → Permission (by recency) → Processing (by recency) → Idle (by recency) → Error (by recency)
+ * Returns the ordered session list. Sessions that appear in pinned also appear in their lane,
+ * so we deduplicate: pinned sessions come first, then remaining sessions by lane order.
+ */
+export function getVisualSessionOrder(
+  sessions: C3Session[],
+  sessionMeta: Record<string, SessionMeta>,
+): C3Session[] {
+  const byRecency = (a: C3Session, b: C3Session) =>
+    new Date(b.lastActivity).getTime() - new Date(a.lastActivity).getTime();
+
+  const pinned = sessions.filter((s) => sessionMeta[s.id]?.pinned).sort(byRecency);
+  const pinnedIds = new Set(pinned.map((s) => s.id));
+  const unpinned = sessions.filter((s) => !pinnedIds.has(s.id));
+
+  const ordered: C3Session[] = [...pinned];
+  for (const lane of LANES) {
+    const laneSessions = unpinned
+      .filter((s) => lane.states.includes(s.state))
+      .sort(byRecency);
+    ordered.push(...laneSessions);
+  }
+  return ordered;
+}
+
 export const STATE_COLORS: Record<SessionState, string> = {
   spawning: '#2563EB',
   processing: '#2563EB',
