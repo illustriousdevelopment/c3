@@ -11,6 +11,13 @@ Use the Developer ID Application certificate for the Apple team:
 Developer ID Application: illustrious development, llc (4VK28V5GUS)
 ```
 
+Before building a release DMG, clean Cargo's target directory so Tauri cannot
+reuse an older Rust binary with stale embedded frontend assets:
+
+```bash
+(cd src-tauri && cargo clean)
+```
+
 Build the release DMG with the signing identity injected into Tauri:
 
 ```bash
@@ -18,6 +25,14 @@ bash -c 'export NVM_DIR="$HOME/.nvm" && source "$NVM_DIR/nvm.sh" && npm run taur
 ```
 
 Expected output includes signing for both `C3.app` and `C3_*.dmg`.
+After the build, mount the DMG once and confirm the contained app was signed
+during the current release build, not an older cached build:
+
+```bash
+hdiutil attach src-tauri/target/release/bundle/dmg/C3_0.2.10_aarch64.dmg -nobrowse
+codesign -dv --verbose=4 /Volumes/C3/C3.app 2>&1 | grep -E 'CDHash=|Timestamp='
+hdiutil detach /Volumes/C3
+```
 
 ## Notarization
 
