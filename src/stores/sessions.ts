@@ -1,12 +1,23 @@
 import { create } from 'zustand';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
-import type { C3Session, SessionMeta, SessionMetaStore, AppSettings, SoundConfig } from '../types';
+import type {
+  AppSettings,
+  C3Session,
+  GroupAssignment,
+  SessionGroup,
+  SessionMeta,
+  SessionMetaStore,
+  SoundConfig,
+} from '../types';
 import { getVisualSessionOrder } from '../types';
 
 interface SessionStore {
   sessions: Record<string, C3Session>;
   sessionMeta: Record<string, SessionMeta>;
+  groups: SessionGroup[];
+  draggingSessionId: string | null;
+  dragTargetGroupId: string | null;
   selectedSessionId: string | null;
   pendingKillSessionId: string | null;
   isConnected: boolean;
@@ -21,11 +32,18 @@ interface SessionStore {
   clearKillRequest: () => void;
   setConnected: (connected: boolean) => void;
   setNotificationsEnabled: (enabled: boolean) => void;
+  setDraggingSessionId: (sessionId: string | null) => void;
+  setDragTargetGroupId: (groupId: string | null) => void;
+  clearSessionDrag: () => void;
 
   // Session metadata
   setSessionTag: (sessionId: string, tag: string) => Promise<void>;
   setSessionPinned: (sessionId: string, pinned: boolean) => Promise<void>;
   loadSessionMeta: () => Promise<void>;
+  upsertGroup: (group: SessionGroup) => Promise<void>;
+  deleteGroup: (groupId: string) => Promise<void>;
+  assignSessionGroup: (sessionId: string, groupId: string | null, assignment: GroupAssignment) => Promise<void>;
+  autoAssignGroups: (sessions?: C3Session[]) => Promise<void>;
 
   // Navigation
   selectNextSession: () => void;
@@ -44,10 +62,39 @@ interface SessionStore {
 
 // Track previous states for notification logic
 const previousStates: Record<string, string> = {};
+const autoAssigning = new Set<string>();
+
+function applyMetaStore(store: SessionMetaStore): Pick<SessionStore, 'sessionMeta' | 'groups'> {
+  return {
+    sessionMeta: store.sessions || {},
+    groups: store.groups || [],
+  };
+}
+
+function normalizeNeedle(value: string): string {
+  return value.trim().toLowerCase();
+}
+
+function sessionMatchesGroup(session: C3Session, group: SessionGroup): boolean {
+  const needles = group.matchText.map(normalizeNeedle).filter(Boolean);
+  if (needles.length === 0) return false;
+
+  const haystack = `${session.projectName || ''}\n${session.projectPath || ''}`.toLowerCase();
+  return needles.some((needle) => haystack.includes(needle));
+}
+
+function sortGroupsByCreatedAt(groups: SessionGroup[]): SessionGroup[] {
+  return [...groups].sort(
+    (a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()
+  );
+}
 
 export const useSessionStore = create<SessionStore>((set, get) => ({
   sessions: {},
   sessionMeta: {},
+  groups: [],
+  draggingSessionId: null,
+  dragTargetGroupId: null,
   selectedSessionId: null,
   pendingKillSessionId: null,
   isConnected: false,
@@ -59,6 +106,9 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
       record[s.id] = s;
     });
     set({ sessions: record, isConnected: true });
+    queueMicrotask(() => {
+      get().autoAssignGroups(sessions);
+    });
   },
 
   updateSession: (session) => {
@@ -69,6 +119,9 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
     set((state) => ({
       sessions: { ...state.sessions, [session.id]: session },
     }));
+    queueMicrotask(() => {
+      get().autoAssignGroups([session]);
+    });
   },
 
   removeSession: (sessionId) => {
@@ -110,6 +163,18 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
     }
   },
 
+  setDraggingSessionId: (sessionId) => {
+    set({ draggingSessionId: sessionId });
+  },
+
+  setDragTargetGroupId: (groupId) => {
+    set({ dragTargetGroupId: groupId });
+  },
+
+  clearSessionDrag: () => {
+    set({ draggingSessionId: null, dragTargetGroupId: null });
+  },
+
   // Session metadata
   setSessionTag: async (sessionId, tag) => {
     try {
@@ -118,7 +183,7 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
         tag,
         pinned: null,
       });
-      set({ sessionMeta: result.sessions });
+      set(applyMetaStore(result));
     } catch (e) {
       console.error('[C3] Failed to set session tag:', e);
     }
@@ -131,7 +196,7 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
         tag: null,
         pinned,
       });
-      set({ sessionMeta: result.sessions });
+      set(applyMetaStore(result));
     } catch (e) {
       console.error('[C3] Failed to set session pinned:', e);
     }
@@ -140,16 +205,94 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
   loadSessionMeta: async () => {
     try {
       const result = await invoke<SessionMetaStore>('get_session_meta');
-      set({ sessionMeta: result.sessions });
+      set(applyMetaStore(result));
+      queueMicrotask(() => {
+        get().autoAssignGroups();
+      });
     } catch (e) {
       console.error('[C3] Failed to load session meta:', e);
     }
   },
 
+  upsertGroup: async (group) => {
+    try {
+      const normalizedGroup: SessionGroup = {
+        ...group,
+        name: group.name.trim(),
+        color: group.color || '#3B82F6',
+        matchText: Array.from(new Set(group.matchText.map((text) => text.trim()).filter(Boolean))),
+      };
+      const result = await invoke<SessionMetaStore>('upsert_session_group', { group: normalizedGroup });
+      set(applyMetaStore(result));
+      queueMicrotask(() => {
+        get().autoAssignGroups();
+      });
+    } catch (e) {
+      console.error('[C3] Failed to save group:', e);
+      throw e;
+    }
+  },
+
+  deleteGroup: async (groupId) => {
+    try {
+      const result = await invoke<SessionMetaStore>('delete_session_group', { groupId });
+      set(applyMetaStore(result));
+    } catch (e) {
+      console.error('[C3] Failed to delete group:', e);
+      throw e;
+    }
+  },
+
+  assignSessionGroup: async (sessionId, groupId, assignment) => {
+    try {
+      const result = await invoke<SessionMetaStore>('assign_session_group', {
+        sessionId,
+        groupId,
+        groupAssignment: assignment,
+      });
+      set(applyMetaStore(result));
+    } catch (e) {
+      console.error('[C3] Failed to assign session group:', e);
+      throw e;
+    }
+  },
+
+  autoAssignGroups: async (targetSessions) => {
+    const { groups, sessions, sessionMeta } = get();
+    if (groups.length === 0) return;
+
+    const orderedGroups = sortGroupsByCreatedAt(groups);
+    const candidates = targetSessions || Object.values(sessions);
+
+    for (const session of candidates) {
+      const meta = sessionMeta[session.id];
+      if (meta?.groupId || meta?.groupAssignment === 'manual' || autoAssigning.has(session.id)) {
+        continue;
+      }
+
+      const group = orderedGroups.find((candidate) => sessionMatchesGroup(session, candidate));
+      if (!group) continue;
+
+      autoAssigning.add(session.id);
+      try {
+        const result = await invoke<SessionMetaStore>('assign_session_group', {
+          sessionId: session.id,
+          groupId: group.id,
+          groupAssignment: 'auto',
+        });
+        set(applyMetaStore(result));
+      } catch (e) {
+        console.error('[C3] Failed to auto-assign session group:', e);
+      } finally {
+        autoAssigning.delete(session.id);
+      }
+    }
+  },
+
   // Keyboard navigation
   selectNextSession: () => {
-    const { sessions, sessionMeta, selectedSessionId } = get();
-    const sessionList = getVisualSessionOrder(Object.values(sessions), sessionMeta);
+    const { sessions, sessionMeta, groups, selectedSessionId } = get();
+    const sessionList = getVisualSessionOrder(Object.values(sessions), sessionMeta, groups);
     if (sessionList.length === 0) return;
 
     const currentIndex = sessionList.findIndex((s) => s.id === selectedSessionId);
@@ -158,8 +301,8 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
   },
 
   selectPrevSession: () => {
-    const { sessions, sessionMeta, selectedSessionId } = get();
-    const sessionList = getVisualSessionOrder(Object.values(sessions), sessionMeta);
+    const { sessions, sessionMeta, groups, selectedSessionId } = get();
+    const sessionList = getVisualSessionOrder(Object.values(sessions), sessionMeta, groups);
     if (sessionList.length === 0) return;
 
     const currentIndex = sessionList.findIndex((s) => s.id === selectedSessionId);
@@ -306,7 +449,6 @@ export async function initializeSessionListeners() {
     console.error('[C3] Failed to load initial settings:', e);
   }
 
-  // Initial fetch
-  await useSessionStore.getState().fetchSessions();
   await useSessionStore.getState().loadSessionMeta();
+  await useSessionStore.getState().fetchSessions();
 }

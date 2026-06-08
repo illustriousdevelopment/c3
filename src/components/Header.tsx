@@ -1,6 +1,7 @@
-import { Search, Bell, BellOff, Settings, Plug, Plus } from 'lucide-react';
+import { Search, Bell, BellOff, Settings, Plug, Plus, Download, RefreshCw, CheckCircle2, AlertCircle } from 'lucide-react';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { useSessionStore } from '../stores/sessions';
+import { useUpdateChecker } from '../stores/updater';
 import { useState, useCallback } from 'react';
 
 interface HeaderProps {
@@ -15,6 +16,7 @@ export function Header({ onSearchClick, onSettingsClick }: HeaderProps) {
   const setNotificationsEnabled = useSessionStore((state) => state.setNotificationsEnabled);
   const createNewTask = useSessionStore((state) => state.createNewTask);
   const focusTerminal = useSessionStore((state) => state.focusTerminal);
+  const updater = useUpdateChecker();
   const [isCreating, setIsCreating] = useState(false);
 
   const handleNewTask = async () => {
@@ -48,6 +50,13 @@ export function Header({ onSearchClick, onSettingsClick }: HeaderProps) {
   const processingCount = sessionList.filter(
     (s) => s.state === 'processing' || s.state === 'spawning'
   ).length;
+  const updateTitle = updater.status === 'available'
+    ? `Update available: ${updater.currentVersion} → ${updater.latestVersion}`
+    : updater.status === 'checking'
+      ? 'Checking for updates'
+      : updater.status === 'error'
+        ? `Update check failed${updater.error ? `: ${updater.error}` : ''}`
+        : `C3 is up to date${updater.currentVersion ? ` (${updater.currentVersion})` : ''}`;
 
   return (
     <header className="header" onMouseDown={handleDragStart}>
@@ -78,6 +87,24 @@ export function Header({ onSearchClick, onSettingsClick }: HeaderProps) {
           title={notificationsEnabled ? 'Notifications on' : 'Notifications off'}
         >
           {notificationsEnabled ? <Bell size={14} /> : <BellOff size={14} />}
+        </button>
+
+        <button
+          className={`header-icon-btn update-button update-${updater.status}`}
+          onClick={() => updater.status === 'available' ? updater.openUpdate() : updater.checkForUpdates()}
+          disabled={updater.status === 'checking'}
+          title={updateTitle}
+        >
+          {updater.status === 'checking' ? (
+            <RefreshCw size={14} />
+          ) : updater.status === 'available' ? (
+            <Download size={14} />
+          ) : updater.status === 'error' ? (
+            <AlertCircle size={14} />
+          ) : (
+            <CheckCircle2 size={14} />
+          )}
+          {updater.status === 'available' && <span className="update-dot" />}
         </button>
 
         <div className="header-stats">

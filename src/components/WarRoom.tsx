@@ -1,15 +1,19 @@
 import { useState } from 'react';
+import { Plus } from 'lucide-react';
 import { useSessionStore } from '../stores/sessions';
 import { Lane } from './Lane';
 import { PinnedLane } from './PinnedLane';
-import { LANES, SessionState, STATE_COLORS, getVisualSessionOrder } from '../types';
+import { GroupLane } from './GroupLane';
+import { GroupModal } from './GroupModal';
+import { LANES, STATE_COLORS, getVisualSessionOrder } from '../types';
+import type { SessionGroup, SessionState } from '../types';
 
 type FilterOption = 'all' | 'pinned' | SessionState;
 
 const FILTER_OPTIONS: { id: FilterOption; label: string; color?: string }[] = [
   { id: 'all', label: 'All' },
   { id: 'pinned', label: 'Pinned', color: '#8B5CF6' },
-{ id: 'awaiting_permission', label: 'Permission', color: STATE_COLORS.awaiting_permission },
+  { id: 'awaiting_permission', label: 'Permission', color: STATE_COLORS.awaiting_permission },
   { id: 'processing', label: 'Working', color: STATE_COLORS.processing },
   { id: 'complete', label: 'Idle', color: STATE_COLORS.complete },
 ];
@@ -17,12 +21,23 @@ const FILTER_OPTIONS: { id: FilterOption; label: string; color?: string }[] = [
 export function WarRoom() {
   const sessions = useSessionStore((state) => state.sessions);
   const sessionMeta = useSessionStore((state) => state.sessionMeta);
+  const groups = useSessionStore((state) => state.groups);
   const [activeFilter, setActiveFilter] = useState<FilterOption>('all');
+  const [isGroupModalOpen, setIsGroupModalOpen] = useState(false);
+  const [editingGroup, setEditingGroup] = useState<SessionGroup | null>(null);
 
   const sessionList = Object.values(sessions);
+  const sortedGroups = [...groups].sort(
+    (a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()
+  );
+  const groupIds = new Set(sortedGroups.map((group) => group.id));
+  const isGrouped = (sessionId: string) => {
+    const groupId = sessionMeta[sessionId]?.groupId;
+    return Boolean(groupId && groupIds.has(groupId));
+  };
 
   // Build a map of session ID → shortcut number (1-9) based on visual order
-  const visualOrder = getVisualSessionOrder(sessionList, sessionMeta);
+  const visualOrder = getVisualSessionOrder(sessionList, sessionMeta, sortedGroups);
   const shortcutMap: Record<string, number> = {};
   visualOrder.forEach((s, i) => {
     if (i < 9) shortcutMap[s.id] = i + 1;
@@ -53,9 +68,30 @@ export function WarRoom() {
     error: sessionList.filter((s) => s.state === 'error').length,
   };
 
+  const openNewGroupModal = () => {
+    setEditingGroup(null);
+    setIsGroupModalOpen(true);
+  };
+
+  const openEditGroupModal = (group: SessionGroup) => {
+    setEditingGroup(group);
+    setIsGroupModalOpen(true);
+  };
+
+  const closeGroupModal = () => {
+    setEditingGroup(null);
+    setIsGroupModalOpen(false);
+  };
+
   if (sessionList.length === 0) {
     return (
       <div className="war-room empty">
+        <div className="filter-bar empty-filter-bar">
+          <button className="new-group-button" onClick={openNewGroupModal}>
+            <Plus size={14} />
+            <span>New Group</span>
+          </button>
+        </div>
         <div className="empty-state">
           <div className="empty-icon">◇</div>
           <h2>No Active Sessions</h2>
@@ -64,6 +100,11 @@ export function WarRoom() {
             C3 scans tmux for agent panes every few seconds.
           </p>
         </div>
+        <GroupModal
+          isOpen={isGroupModalOpen}
+          group={editingGroup}
+          onClose={closeGroupModal}
+        />
       </div>
     );
   }
@@ -100,6 +141,10 @@ export function WarRoom() {
             )}
           </button>
         ))}
+        <button className="new-group-button" onClick={openNewGroupModal}>
+          <Plus size={14} />
+          <span>New Group</span>
+        </button>
       </div>
 
       {/* Pinned Lane - always at top when not filtering by other criteria */}
@@ -107,10 +152,27 @@ export function WarRoom() {
         <PinnedLane sessions={pinnedSessions} shortcutMap={shortcutMap} />
       )}
 
-      {/* Regular Lanes — exclude pinned sessions to avoid duplication */}
+      {/* Custom group lanes appear below pinned and above status lanes. */}
+      {activeFilter === 'all' && sortedGroups.map((group) => {
+        const groupSessions = sessionList.filter((session) => (
+          !sessionMeta[session.id]?.pinned && sessionMeta[session.id]?.groupId === group.id
+        ));
+
+        return (
+          <GroupLane
+            key={group.id}
+            group={group}
+            sessions={groupSessions}
+            shortcutMap={shortcutMap}
+            onEdit={openEditGroupModal}
+          />
+        );
+      })}
+
+      {/* Regular Lanes — exclude pinned/grouped sessions from the all view to avoid duplication. */}
       {activeFilter !== 'pinned' && lanesToShow.map((lane) => {
         const laneSessions = (activeFilter === 'all')
-          ? filteredSessions.filter((s) => !sessionMeta[s.id]?.pinned)
+          ? filteredSessions.filter((s) => !sessionMeta[s.id]?.pinned && !isGrouped(s.id))
           : filteredSessions;
         return <Lane key={lane.id} lane={lane} sessions={laneSessions} shortcutMap={shortcutMap} />;
       })}
@@ -127,6 +189,11 @@ export function WarRoom() {
           </button>
         </div>
       )}
+      <GroupModal
+        isOpen={isGroupModalOpen}
+        group={editingGroup}
+        onClose={closeGroupModal}
+      />
     </div>
   );
 }

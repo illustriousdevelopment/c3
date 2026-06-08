@@ -20,6 +20,7 @@ function App() {
   const pendingKillSessionId = useSessionStore((state) => state.pendingKillSessionId);
   const sessions = useSessionStore((state) => state.sessions);
   const sessionMeta = useSessionStore((state) => state.sessionMeta);
+  const groups = useSessionStore((state) => state.groups);
   const requestKillSession = useSessionStore((state) => state.requestKillSession);
   const clearKillRequest = useSessionStore((state) => state.clearKillRequest);
   const killSession = useSessionStore((state) => state.killSession);
@@ -110,7 +111,7 @@ function App() {
     // Number keys 1-9 for quick access (matches visual order)
     if (e.key >= '1' && e.key <= '9' && !e.metaKey && !e.ctrlKey) {
       e.preventDefault();
-      const sessionList = getVisualSessionOrder(Object.values(sessions), sessionMeta);
+      const sessionList = getVisualSessionOrder(Object.values(sessions), sessionMeta, groups);
       const index = parseInt(e.key) - 1;
       if (index < sessionList.length) {
         const session = sessionList[index];
@@ -143,7 +144,7 @@ function App() {
       }
       return;
     }
-  }, [isSearchOpen, pendingKillSessionId, clearKillRequest, selectNextSession, selectPrevSession, focusSelectedSession, selectedSessionId, sessions, sessionMeta, requestKillSession, killSession, showKeyboardHints]);
+  }, [isSearchOpen, pendingKillSessionId, clearKillRequest, selectNextSession, selectPrevSession, focusSelectedSession, selectedSessionId, sessions, sessionMeta, groups, requestKillSession, killSession, showKeyboardHints]);
 
   useEffect(() => {
     window.addEventListener('keydown', handleKeyDown);

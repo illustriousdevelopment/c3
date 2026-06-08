@@ -19,13 +19,26 @@ export interface SessionMetrics {
   startTime?: string;
 }
 
+export type GroupAssignment = 'auto' | 'manual';
+
+export interface SessionGroup {
+  id: string;
+  name: string;
+  color: string;
+  matchText: string[];
+  createdAt: string;
+}
+
 export interface SessionMeta {
   tag?: string;
   pinned: boolean;
+  groupId?: string;
+  groupAssignment?: GroupAssignment;
 }
 
 export interface SessionMetaStore {
   sessions: Record<string, SessionMeta>;
+  groups: SessionGroup[];
 }
 
 export interface C3Session {
@@ -127,17 +140,34 @@ export const LANES: Lane[] = [
 export function getVisualSessionOrder(
   sessions: C3Session[],
   sessionMeta: Record<string, SessionMeta>,
+  groups: SessionGroup[] = [],
 ): C3Session[] {
   const byRecency = (a: C3Session, b: C3Session) =>
     new Date(b.lastActivity).getTime() - new Date(a.lastActivity).getTime();
 
   const pinned = sessions.filter((s) => sessionMeta[s.id]?.pinned).sort(byRecency);
   const pinnedIds = new Set(pinned.map((s) => s.id));
-  const unpinned = sessions.filter((s) => !pinnedIds.has(s.id));
+  const orderedGroups = [...groups].sort(
+    (a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()
+  );
+  const groupIds = new Set(orderedGroups.map((g) => g.id));
+  const groupedIds = new Set(
+    sessions
+      .filter((s) => !pinnedIds.has(s.id) && sessionMeta[s.id]?.groupId && groupIds.has(sessionMeta[s.id].groupId!))
+      .map((s) => s.id)
+  );
+  const unpinnedUngrouped = sessions.filter((s) => !pinnedIds.has(s.id) && !groupedIds.has(s.id));
 
   const ordered: C3Session[] = [...pinned];
+  for (const group of orderedGroups) {
+    const groupSessions = sessions
+      .filter((s) => !pinnedIds.has(s.id) && sessionMeta[s.id]?.groupId === group.id)
+      .sort(byRecency);
+    ordered.push(...groupSessions);
+  }
+
   for (const lane of LANES) {
-    const laneSessions = unpinned
+    const laneSessions = unpinnedUngrouped
       .filter((s) => lane.states.includes(s.state))
       .sort(byRecency);
     ordered.push(...laneSessions);

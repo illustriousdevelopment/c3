@@ -1,6 +1,6 @@
 [package]
 name = "c3"
-version = "0.2.9"
+version = "0.2.10"
 description = "Carmelo Command Center - Visual session manager"
 authors = ["jonpatterson"]
 edition = "2021"
@@ -10,10 +10,10 @@ name = "c3_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]
-tauri-build = { version = "2", features = [] }
+tauri-build = { version = "2.6.2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = ["tray-icon"] }
+tauri = { version = "2.11.2", features = ["tray-icon"] }
 tauri-plugin-opener = "2"
 tauri-plugin-shell = "2"
 tauri-plugin-notification = "2"

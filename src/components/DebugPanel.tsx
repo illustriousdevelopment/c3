@@ -17,6 +17,20 @@ interface HookTimestamp {
   protected: boolean;
 }
 
+interface StateDiagnostic {
+  timestamp: string;
+  source: string;
+  session_id: string | null;
+  agent_kind: string;
+  cwd: string;
+  state: string;
+  reason: string;
+  tool_name: string | null;
+  tmux_target: string | null;
+  pane_title: string | null;
+  skipped: boolean;
+}
+
 interface SessionInfo {
   id: string;
   state: string;
@@ -27,6 +41,7 @@ interface SessionInfo {
 interface DebugInfo {
   hook_events: HookEvent[];
   hook_timestamps: HookTimestamp[];
+  state_diagnostics: StateDiagnostic[];
   sessions: SessionInfo[];
 }
 
@@ -114,6 +129,36 @@ export function DebugPanel({ isOpen, onClose }: DebugPanelProps) {
                     <td style={{ padding: '4px 8px', color: 'var(--text-secondary)' }}>{t.session_id}</td>
                     <td style={{ padding: '4px 8px', color: 'var(--text-primary)' }}>{t.age_secs}s</td>
                     <td style={{ padding: '4px 8px', color: t.protected ? 'var(--accent-green)' : 'var(--text-muted)' }}>{t.protected ? 'YES' : 'no'}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+
+          <h3 style={{ color: 'var(--accent-blue)', marginBottom: 8 }}>State Diagnostics (last 100)</h3>
+          {debugInfo.state_diagnostics.length === 0 ? (
+            <p style={{ color: 'var(--text-muted)', marginBottom: 16 }}>No state diagnostics recorded</p>
+          ) : (
+            <table style={{ width: '100%', borderCollapse: 'collapse', marginBottom: 16 }}>
+              <thead>
+                <tr style={{ textAlign: 'left', color: 'var(--text-muted)', borderBottom: '1px solid var(--border-color)' }}>
+                  <th style={{ padding: '4px 8px' }}>Time</th>
+                  <th style={{ padding: '4px 8px' }}>Source</th>
+                  <th style={{ padding: '4px 8px' }}>Session</th>
+                  <th style={{ padding: '4px 8px' }}>State</th>
+                  <th style={{ padding: '4px 8px' }}>Tool</th>
+                  <th style={{ padding: '4px 8px' }}>Reason</th>
+                </tr>
+              </thead>
+              <tbody>
+                {[...debugInfo.state_diagnostics].reverse().map((d, i) => (
+                  <tr key={i} style={{ borderBottom: '1px solid var(--border-subtle)', opacity: d.skipped ? 0.55 : 1 }}>
+                    <td style={{ padding: '4px 8px', color: 'var(--text-muted)' }}>{d.timestamp}</td>
+                    <td style={{ padding: '4px 8px', color: 'var(--text-primary)', fontWeight: 600 }}>{d.source}</td>
+                    <td style={{ padding: '4px 8px', color: d.session_id ? 'var(--text-secondary)' : 'var(--accent-red)', maxWidth: 120, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{d.session_id || d.cwd.split('/').pop()}</td>
+                    <td style={{ padding: '4px 8px', color: d.state === 'AwaitingPermission' ? 'var(--accent-red)' : 'var(--text-secondary)' }}>{d.state}</td>
+                    <td style={{ padding: '4px 8px', color: 'var(--text-muted)' }}>{d.tool_name || '-'}</td>
+                    <td title={d.reason} style={{ padding: '4px 8px', color: d.skipped ? 'var(--accent-amber)' : 'var(--text-muted)', maxWidth: 260, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{d.reason}</td>
                   </tr>
                 ))}
               </tbody>

@@ -1,5 +1,5 @@
-mod tmux_scanner;
 mod plugins;
+mod tmux_scanner;
 
 use chrono::{DateTime, Utc};
 use parking_lot::RwLock;
@@ -9,9 +9,9 @@ use std::fs;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use tauri::{AppHandle, Emitter, Manager, RunEvent, WindowEvent};
 use tauri::menu::{MenuBuilder, MenuItemBuilder};
 use tauri::tray::TrayIconBuilder;
+use tauri::{AppHandle, Emitter, Manager, RunEvent, WindowEvent};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{broadcast, watch};
 
@@ -113,7 +113,10 @@ impl Default for AppSettings {
             notifications_enabled: true,
             permission_sound: SoundConfig::default(),
             input_sound: SoundConfig::default(),
-            complete_sound: SoundConfig { enabled: false, sound: None },
+            complete_sound: SoundConfig {
+                enabled: false,
+                sound: None,
+            },
         }
     }
 }
@@ -133,13 +136,28 @@ fn session_meta_path() -> PathBuf {
     config_dir().join("session-meta.json")
 }
 
-// Session metadata (tags, pins)
+// Session metadata (tags, pins, custom groups)
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct SessionMeta {
     #[serde(default)]
     pub tag: Option<String>,
     #[serde(default)]
     pub pinned: bool,
+    #[serde(default, rename = "groupId")]
+    pub group_id: Option<String>,
+    #[serde(default, rename = "groupAssignment")]
+    pub group_assignment: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionGroup {
+    pub id: String,
+    pub name: String,
+    pub color: String,
+    #[serde(default)]
+    pub match_text: Vec<String>,
+    pub created_at: DateTime<Utc>,
 }
 
 // All session metadata keyed by tmux target
@@ -147,6 +165,12 @@ pub struct SessionMeta {
 pub struct SessionMetaStore {
     #[serde(default)]
     pub sessions: HashMap<String, SessionMeta>,
+    #[serde(default)]
+    pub groups: Vec<SessionGroup>,
+}
+
+fn session_meta_is_empty(meta: &SessionMeta) -> bool {
+    meta.tag.is_none() && !meta.pinned && meta.group_id.is_none() && meta.group_assignment.is_none()
 }
 
 fn load_session_meta() -> SessionMetaStore {
@@ -195,9 +219,7 @@ fn save_settings(settings: &AppSettings) -> Result<(), String> {
 fn detect_terminal() -> Option<String> {
     for &term in KNOWN_TERMINALS {
         // Check if app is running
-        let check = cmd("pgrep")
-            .args(["-x", term])
-            .output();
+        let check = cmd("pgrep").args(["-x", term]).output();
 
         if check.map(|o| o.status.success()).unwrap_or(false) {
             return Some(term.to_string());
@@ -274,7 +296,9 @@ pub struct C3Session {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ClientMessage {
-    Register { session: C3Session },
+    Register {
+        session: C3Session,
+    },
     StateChange {
         #[serde(rename = "sessionId")]
         session_id: String,
@@ -317,6 +341,21 @@ pub struct HookEvent {
     pub skip_reason: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct StateDiagnostic {
+    pub timestamp: String,
+    pub source: String,
+    pub session_id: Option<String>,
+    pub agent_kind: String,
+    pub cwd: String,
+    pub state: String,
+    pub reason: String,
+    pub tool_name: Option<String>,
+    pub tmux_target: Option<String>,
+    pub pane_title: Option<String>,
+    pub skipped: bool,
+}
+
 // Shared state
 pub struct AppState {
     pub sessions: RwLock<HashMap<String, C3Session>>,
@@ -330,6 +369,8 @@ pub struct AppState {
     pub notification_timestamps: RwLock<HashMap<String, std::time::Instant>>,
     /// Recent hook events for debugging
     pub hook_events: RwLock<Vec<HookEvent>>,
+    /// Recent state classification decisions for debugging false positives
+    pub state_diagnostics: RwLock<Vec<StateDiagnostic>>,
 }
 
 /// How long (seconds) the tmux scanner should defer to hook-set state
@@ -346,6 +387,7 @@ impl AppState {
             stop_timestamps: RwLock::new(HashMap::new()),
             notification_timestamps: RwLock::new(HashMap::new()),
             hook_events: RwLock::new(Vec::new()),
+            state_diagnostics: RwLock::new(Vec::new()),
         }
     }
 
@@ -356,6 +398,15 @@ impl AppState {
         if events.len() > 50 {
             let drain = events.len() - 50;
             events.drain(..drain);
+        }
+    }
+
+    pub fn log_state_diagnostic(&self, diagnostic: StateDiagnostic) {
+        let mut diagnostics = self.state_diagnostics.write();
+        diagnostics.push(diagnostic);
+        if diagnostics.len() > 100 {
+            let drain = diagnostics.len() - 100;
+            diagnostics.drain(..drain);
         }
     }
 }
@@ -370,33 +421,39 @@ fn get_sessions(state: tauri::State<Arc<AppState>>) -> Vec<C3Session> {
 #[tauri::command]
 fn get_debug_info(state: tauri::State<Arc<AppState>>) -> serde_json::Value {
     let events = state.hook_events.read().clone();
+    let diagnostics = state.state_diagnostics.read().clone();
     let timestamps: Vec<serde_json::Value> = {
         let ts = state.hook_timestamps.read();
-        ts.iter().map(|(id, instant)| {
-            serde_json::json!({
-                "session_id": id,
-                "age_secs": instant.elapsed().as_secs(),
-                "protected": instant.elapsed().as_secs() < HOOK_GRACE_PERIOD_SECS,
+        ts.iter()
+            .map(|(id, instant)| {
+                serde_json::json!({
+                    "session_id": id,
+                    "age_secs": instant.elapsed().as_secs(),
+                    "protected": instant.elapsed().as_secs() < HOOK_GRACE_PERIOD_SECS,
+                })
             })
-        }).collect()
+            .collect()
     };
     let sessions: Vec<serde_json::Value> = {
         let s = state.sessions.read();
-        s.values().map(|s| {
-            serde_json::json!({
-                "id": s.id,
-                "state": format!("{:?}", s.state),
-                "project_name": s.project_name,
-                "project_path": s.project_path,
-                "agent_kind": s.agent_kind,
-                "tmux_target": s.tmux_target,
-                "terminal_tty": s.terminal_tty,
+        s.values()
+            .map(|s| {
+                serde_json::json!({
+                    "id": s.id,
+                    "state": format!("{:?}", s.state),
+                    "project_name": s.project_name,
+                    "project_path": s.project_path,
+                    "agent_kind": s.agent_kind,
+                    "tmux_target": s.tmux_target,
+                    "terminal_tty": s.terminal_tty,
+                })
             })
-        }).collect()
+            .collect()
     };
     serde_json::json!({
         "hook_events": events,
         "hook_timestamps": timestamps,
+        "state_diagnostics": diagnostics,
         "sessions": sessions,
     })
 }
@@ -456,9 +513,7 @@ async fn focus_tmux_target(tmux_target: &str) -> Result<(), String> {
 
     // Activate terminal using osascript
     let activate_script = format!("tell application \"{}\" to activate", terminal);
-    let activate_result = cmd("osascript")
-        .args(["-e", &activate_script])
-        .output();
+    let activate_result = cmd("osascript").args(["-e", &activate_script]).output();
 
     if let Err(e) = activate_result {
         log::warn!("Failed to activate {}: {}", terminal, e);
@@ -470,18 +525,14 @@ async fn focus_tmux_target(tmux_target: &str) -> Result<(), String> {
     let target = format!("{}:{}.{}", session, window, pane);
 
     // Switch the client to the target session (needed when pane is in a different tmux session)
-    let _ = cmd("tmux")
-        .args(["switch-client", "-t", &target])
-        .output();
+    let _ = cmd("tmux").args(["switch-client", "-t", &target]).output();
 
     // Select the window and pane
     let _ = cmd("tmux")
         .args(["select-window", "-t", &format!("{}:{}", session, window)])
         .output();
 
-    let _ = cmd("tmux")
-        .args(["select-pane", "-t", &target])
-        .output();
+    let _ = cmd("tmux").args(["select-pane", "-t", &target]).output();
 
     Ok(())
 }
@@ -513,7 +564,11 @@ fn infer_tmux_target(project_path: Option<&str>, terminal_tty: Option<&str>) -> 
             if parts.len() < 3 {
                 return None;
             }
-            Some((parts[0].to_string(), normalize_tty(parts[1]), parts[2].to_string()))
+            Some((
+                parts[0].to_string(),
+                normalize_tty(parts[1]),
+                parts[2].to_string(),
+            ))
         })
         .collect();
 
@@ -536,6 +591,36 @@ fn infer_tmux_target(project_path: Option<&str>, terminal_tty: Option<&str>) -> 
     None
 }
 
+fn tmux_target_from_hook(notification: &HookNotification) -> Option<String> {
+    notification
+        .tmux
+        .as_ref()
+        .and_then(|tmux_ctx| {
+            if !tmux_ctx.session.is_empty() && !tmux_ctx.window.is_empty() {
+                let pane = if tmux_ctx.pane.is_empty() {
+                    "0"
+                } else {
+                    &tmux_ctx.pane
+                };
+                Some(format!("{}:{}.{}", tmux_ctx.session, tmux_ctx.window, pane))
+            } else {
+                None
+            }
+        })
+        .or_else(|| {
+            infer_tmux_target(
+                Some(&notification.cwd),
+                notification.terminal_tty.as_deref(),
+            )
+        })
+}
+
+pub(crate) fn is_unresolved_hook_session(session: &C3Session) -> bool {
+    session.id.starts_with("hook:")
+        && session.tmux_target.is_none()
+        && session.terminal_tty.is_none()
+}
+
 async fn focus_session_id(state: Arc<AppState>, session_id: String) -> Result<(), String> {
     let session = {
         let sessions = state.sessions.read();
@@ -544,7 +629,10 @@ async fn focus_session_id(state: Arc<AppState>, session_id: String) -> Result<()
 
     let mut session = session.ok_or_else(|| "Session not found".to_string())?;
     let tmux_target = session.tmux_target.clone().or_else(|| {
-        infer_tmux_target(session.project_path.as_deref(), session.terminal_tty.as_deref())
+        infer_tmux_target(
+            session.project_path.as_deref(),
+            session.terminal_tty.as_deref(),
+        )
     });
 
     if let Some(tmux_target) = tmux_target {
@@ -615,7 +703,11 @@ fn get_session_meta() -> SessionMetaStore {
 
 // Tauri command: Update session metadata (tag or pin)
 #[tauri::command]
-fn update_session_meta(session_id: String, tag: Option<String>, pinned: Option<bool>) -> Result<SessionMetaStore, String> {
+fn update_session_meta(
+    session_id: String,
+    tag: Option<String>,
+    pinned: Option<bool>,
+) -> Result<SessionMetaStore, String> {
     let mut store = load_session_meta();
 
     let meta = store.sessions.entry(session_id).or_default();
@@ -627,8 +719,80 @@ fn update_session_meta(session_id: String, tag: Option<String>, pinned: Option<b
     }
 
     // Clean up empty entries
-    store.sessions.retain(|_, m| m.tag.is_some() || m.pinned);
+    store.sessions.retain(|_, m| !session_meta_is_empty(m));
 
+    save_session_meta(&store)?;
+    Ok(store)
+}
+
+#[tauri::command]
+fn upsert_session_group(group: SessionGroup) -> Result<SessionMetaStore, String> {
+    if group.id.trim().is_empty() {
+        return Err("Group id is required".to_string());
+    }
+    if group.name.trim().is_empty() {
+        return Err("Group name is required".to_string());
+    }
+
+    let mut store = load_session_meta();
+    let mut updated = false;
+
+    for existing in &mut store.groups {
+        if existing.id == group.id {
+            *existing = group.clone();
+            updated = true;
+            break;
+        }
+    }
+
+    if !updated {
+        store.groups.push(group);
+    }
+
+    store.groups.sort_by_key(|g| g.created_at);
+    save_session_meta(&store)?;
+    Ok(store)
+}
+
+#[tauri::command]
+fn delete_session_group(group_id: String) -> Result<SessionMetaStore, String> {
+    let mut store = load_session_meta();
+    store.groups.retain(|g| g.id != group_id);
+
+    for meta in store.sessions.values_mut() {
+        if meta.group_id.as_deref() == Some(group_id.as_str()) {
+            meta.group_id = None;
+            meta.group_assignment = Some("manual".to_string());
+        }
+    }
+
+    store.sessions.retain(|_, m| !session_meta_is_empty(m));
+    save_session_meta(&store)?;
+    Ok(store)
+}
+
+#[tauri::command]
+fn assign_session_group(
+    session_id: String,
+    group_id: Option<String>,
+    group_assignment: String,
+) -> Result<SessionMetaStore, String> {
+    if group_assignment != "auto" && group_assignment != "manual" {
+        return Err("groupAssignment must be auto or manual".to_string());
+    }
+
+    let mut store = load_session_meta();
+    if let Some(ref id) = group_id {
+        if !store.groups.iter().any(|g| &g.id == id) {
+            return Err(format!("Unknown group id: {id}"));
+        }
+    }
+
+    let meta = store.sessions.entry(session_id).or_default();
+    meta.group_id = group_id;
+    meta.group_assignment = Some(group_assignment);
+
+    store.sessions.retain(|_, m| !session_meta_is_empty(m));
     save_session_meta(&store)?;
     Ok(store)
 }
@@ -656,7 +820,16 @@ async fn create_new_task() -> Result<String, String> {
     let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
     let target_session = format!("{}:", session_name);
     let create_window = cmd("tmux")
-        .args(["new-window", "-t", &target_session, "-c", &home, "-P", "-F", "#{session_name}:#{window_index}.#{pane_index}"])
+        .args([
+            "new-window",
+            "-t",
+            &target_session,
+            "-c",
+            &home,
+            "-P",
+            "-F",
+            "#{session_name}:#{window_index}.#{pane_index}",
+        ])
         .output()
         .map_err(|e| format!("Failed to create window: {}", e))?;
 
@@ -702,9 +875,7 @@ async fn play_sound(sound: String) -> Result<(), String> {
     }
 
     // Play using afplay (macOS command-line audio player)
-    let result = cmd("afplay")
-        .arg(&sound_file)
-        .spawn();
+    let result = cmd("afplay").arg(&sound_file).spawn();
 
     match result {
         Ok(_) => Ok(()),
@@ -794,7 +965,9 @@ fn check_hook_status(app_handle: AppHandle) -> HookStatus {
         .unwrap_or(false);
 
     // Try to find the bundled resource (for info purposes, not used in status check)
-    let _resource_path = app_handle.path().resource_dir()
+    let _resource_path = app_handle
+        .path()
+        .resource_dir()
         .ok()
         .map(|d| d.join("resources").join("c3-hook.sh"));
 
@@ -822,17 +995,21 @@ fn setup_hooks(app_handle: AppHandle) -> SetupResult {
     }
 
     // Step 1: Find the bundled c3-hook.sh
-    let resource_path = app_handle.path().resource_dir()
+    let resource_path = app_handle
+        .path()
+        .resource_dir()
         .ok()
         .map(|d| d.join("resources").join("c3-hook.sh"));
 
     // Fallback: check if hook script exists in common locations
-    let hook_source = resource_path
-        .filter(|p| p.exists())
-        .or_else(|| {
-            let local = PathBuf::from(&home).join(".local/bin/c3-hook.sh");
-            if local.exists() { Some(local) } else { None }
-        });
+    let hook_source = resource_path.filter(|p| p.exists()).or_else(|| {
+        let local = PathBuf::from(&home).join(".local/bin/c3-hook.sh");
+        if local.exists() {
+            Some(local)
+        } else {
+            None
+        }
+    });
 
     // Step 2: Install hook script to ~/.local/bin/
     let hook_dest = PathBuf::from(&home).join(".local/bin/c3-hook.sh");
@@ -868,7 +1045,9 @@ fn setup_hooks(app_handle: AppHandle) -> SetupResult {
     // Step 3: Copy icon to config directory for terminal-notifier
     let config_dir = PathBuf::from(&home).join(".config/c3");
     let _ = fs::create_dir_all(&config_dir);
-    let icon_source = app_handle.path().resource_dir()
+    let icon_source = app_handle
+        .path()
+        .resource_dir()
         .ok()
         .map(|d| d.join("resources").join("icon.png"))
         .filter(|p| p.exists());
@@ -944,11 +1123,12 @@ fn setup_hooks(app_handle: AppHandle) -> SetupResult {
     let mut settings = existing.clone();
     let settings_obj = settings.as_object_mut().unwrap();
 
-    let mut merged_hooks = if let Some(existing_hooks) = existing.get("hooks").and_then(|h| h.as_object()) {
-        existing_hooks.clone()
-    } else {
-        serde_json::Map::new()
-    };
+    let mut merged_hooks =
+        if let Some(existing_hooks) = existing.get("hooks").and_then(|h| h.as_object()) {
+            existing_hooks.clone()
+        } else {
+            serde_json::Map::new()
+        };
 
     // Overwrite the 4 C3 hook types
     if let Some(c3_obj) = c3_hooks.as_object() {
@@ -1042,17 +1222,21 @@ fn setup_hooks(app_handle: AppHandle) -> SetupResult {
         codex_settings = serde_json::json!({});
     }
     let codex_settings_obj = codex_settings.as_object_mut().unwrap();
-    let mut codex_merged_hooks = if let Some(existing_hooks) = codex_existing.get("hooks").and_then(|h| h.as_object()) {
-        existing_hooks.clone()
-    } else {
-        serde_json::Map::new()
-    };
+    let mut codex_merged_hooks =
+        if let Some(existing_hooks) = codex_existing.get("hooks").and_then(|h| h.as_object()) {
+            existing_hooks.clone()
+        } else {
+            serde_json::Map::new()
+        };
     if let Some(c3_obj) = codex_c3_hooks.as_object() {
         for (key, value) in c3_obj {
             codex_merged_hooks.insert(key.clone(), value.clone());
         }
     }
-    codex_settings_obj.insert("hooks".to_string(), serde_json::Value::Object(codex_merged_hooks));
+    codex_settings_obj.insert(
+        "hooks".to_string(),
+        serde_json::Value::Object(codex_merged_hooks),
+    );
 
     match serde_json::to_string_pretty(&codex_settings) {
         Ok(json) => {
@@ -1075,7 +1259,9 @@ fn setup_hooks(app_handle: AppHandle) -> SetupResult {
 
     SetupResult {
         success: true,
-        message: "C3 hooks installed successfully! Restart Claude Code and Codex sessions to activate.".to_string(),
+        message:
+            "C3 hooks installed successfully! Restart Claude Code and Codex sessions to activate."
+                .to_string(),
         backup_path: backup_path_str,
     }
 }
@@ -1088,9 +1274,7 @@ async fn close_pane(
     tmux_target: String,
 ) -> Result<(), String> {
     // Kill the tmux pane
-    let result = cmd("tmux")
-        .args(["kill-pane", "-t", &tmux_target])
-        .output();
+    let result = cmd("tmux").args(["kill-pane", "-t", &tmux_target]).output();
 
     match result {
         Ok(output) if output.status.success() => {
@@ -1122,16 +1306,16 @@ async fn kill_session(
     .ok_or_else(|| "Session not found".to_string())?;
 
     let tmux_target = session.tmux_target.clone().or_else(|| {
-        infer_tmux_target(session.project_path.as_deref(), session.terminal_tty.as_deref())
+        infer_tmux_target(
+            session.project_path.as_deref(),
+            session.terminal_tty.as_deref(),
+        )
     });
     let tmux_target = tmux_target.ok_or_else(|| {
-        "No tmux target found for this session. C3 can only kill tmux-backed terminals."
-            .to_string()
+        "No tmux target found for this session. C3 can only kill tmux-backed terminals.".to_string()
     })?;
 
-    let result = cmd("tmux")
-        .args(["kill-pane", "-t", &tmux_target])
-        .output();
+    let result = cmd("tmux").args(["kill-pane", "-t", &tmux_target]).output();
 
     match result {
         Ok(output) if output.status.success() => {
@@ -1185,6 +1369,10 @@ struct HookNotification {
     #[serde(default)]
     skip_permissions: bool,
     #[serde(default)]
+    approval_hint: Option<String>,
+    #[serde(default)]
+    hook_payload_keys: Vec<String>,
+    #[serde(default)]
     tmux: Option<TmuxContext>,
 }
 
@@ -1194,6 +1382,42 @@ fn normalize_agent_kind(agent_kind: Option<&str>) -> String {
         "claude" => "claude".to_string(),
         _ => "unknown".to_string(),
     }
+}
+
+fn hook_payload_keys_summary(notification: &HookNotification) -> String {
+    if notification.hook_payload_keys.is_empty() {
+        "none".to_string()
+    } else {
+        notification.hook_payload_keys.join(",")
+    }
+}
+
+fn log_hook_permission_diagnostic(
+    state: &Arc<AppState>,
+    notification: &HookNotification,
+    agent_kind: &str,
+    session_id: Option<String>,
+    state_name: &str,
+    reason: String,
+    skipped: bool,
+) {
+    state.log_state_diagnostic(StateDiagnostic {
+        timestamp: Utc::now().format("%H:%M:%S%.3f").to_string(),
+        source: "hook".to_string(),
+        session_id,
+        agent_kind: agent_kind.to_string(),
+        cwd: notification.cwd.clone(),
+        state: state_name.to_string(),
+        reason,
+        tool_name: notification.tool_name.clone(),
+        tmux_target: tmux_target_from_hook(notification),
+        pane_title: notification
+            .tmux
+            .as_ref()
+            .map(|tmux| tmux.window_name.clone())
+            .filter(|name| !name.is_empty()),
+        skipped,
+    });
 }
 
 fn shell_quote(value: &str) -> String {
@@ -1209,9 +1433,13 @@ fn send_os_notification(
     session_id: Option<&str>,
 ) {
     let mut notifier = cmd("terminal-notifier");
-    notifier.arg("-message").arg(message)
-       .arg("-title").arg(title)
-       .arg("-subtitle").arg(subtitle);
+    notifier
+        .arg("-message")
+        .arg(message)
+        .arg("-title")
+        .arg(title)
+        .arg("-subtitle")
+        .arg(subtitle);
 
     // Use C3's icon as content image (-appIcon is broken on modern macOS,
     // -sender breaks -execute click handling, so -contentImage is the best option)
@@ -1236,7 +1464,11 @@ fn send_os_notification(
             } else {
                 settings.terminal_app
             };
-            let pane = if tmux_ctx.pane.is_empty() { "0" } else { &tmux_ctx.pane };
+            let pane = if tmux_ctx.pane.is_empty() {
+                "0"
+            } else {
+                &tmux_ctx.pane
+            };
             let target = format!("{}:{}.{}", tmux_ctx.session, tmux_ctx.window, pane);
             let window_target = format!("{}:{}", tmux_ctx.session, tmux_ctx.window);
             let switch_script = format!(
@@ -1267,11 +1499,7 @@ fn send_os_notification(
 }
 
 // Handle HTTP hook request
-async fn handle_hook_request(
-    mut stream: TcpStream,
-    state: Arc<AppState>,
-    app_handle: AppHandle,
-) {
+async fn handle_hook_request(mut stream: TcpStream, state: Arc<AppState>, app_handle: AppHandle) {
     use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 
     let mut reader = BufReader::new(&mut stream);
@@ -1287,27 +1515,35 @@ async fn handle_hook_request(
         // Drain headers
         loop {
             let mut header = String::new();
-            if reader.read_line(&mut header).await.is_err() { return; }
-            if header == "\r\n" || header == "\n" { break; }
+            if reader.read_line(&mut header).await.is_err() {
+                return;
+            }
+            if header == "\r\n" || header == "\n" {
+                break;
+            }
         }
         let body = {
             let sessions = state.sessions.read();
-            let debug_info: Vec<serde_json::Value> = sessions.values().map(|s| {
-                serde_json::json!({
-                    "id": s.id,
-                    "project_path": s.project_path,
-                    "agent_kind": s.agent_kind,
-                    "tmux_target": s.tmux_target,
-                    "terminal_tty": s.terminal_tty,
-                    "state": format!("{:?}", s.state),
-                    "project_name": s.project_name,
+            let debug_info: Vec<serde_json::Value> = sessions
+                .values()
+                .map(|s| {
+                    serde_json::json!({
+                        "id": s.id,
+                        "project_path": s.project_path,
+                        "agent_kind": s.agent_kind,
+                        "tmux_target": s.tmux_target,
+                        "terminal_tty": s.terminal_tty,
+                        "state": format!("{:?}", s.state),
+                        "project_name": s.project_name,
+                    })
                 })
-            }).collect();
+                .collect();
             serde_json::to_string_pretty(&debug_info).unwrap_or_default()
         };
         let response = format!(
             "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
-            body.len(), body
+            body.len(),
+            body
         );
         let _ = stream.write_all(response.as_bytes()).await;
         return;
@@ -1315,20 +1551,18 @@ async fn handle_hook_request(
 
     // Handle GET /focus/<session_id> for notification click callbacks.
     if request_line.starts_with("GET /focus/") {
-        let path = request_line
-            .split_whitespace()
-            .nth(1)
-            .unwrap_or_default();
-        let session_id = path
-            .strip_prefix("/focus/")
-            .unwrap_or_default()
-            .to_string();
+        let path = request_line.split_whitespace().nth(1).unwrap_or_default();
+        let session_id = path.strip_prefix("/focus/").unwrap_or_default().to_string();
 
         // Drain headers
         loop {
             let mut header = String::new();
-            if reader.read_line(&mut header).await.is_err() { return; }
-            if header == "\r\n" || header == "\n" { break; }
+            if reader.read_line(&mut header).await.is_err() {
+                return;
+            }
+            if header == "\r\n" || header == "\n" {
+                break;
+            }
         }
 
         let result = focus_session_id(state.clone(), session_id).await;
@@ -1391,12 +1625,30 @@ async fn handle_hook_request(
 
     let agent_kind = normalize_agent_kind(notification.agent_kind.as_deref());
 
-    log::info!("Hook received: {} from {} ({}, skip_perms={})",
-        notification.hook_type, notification.cwd, agent_kind, notification.skip_permissions);
+    log::info!(
+        "Hook received: {} from {} ({}, skip_perms={})",
+        notification.hook_type,
+        notification.cwd,
+        agent_kind,
+        notification.skip_permissions
+    );
 
     // Skip PermissionRequest when running with --dangerously-skip-permissions
     if notification.skip_permissions && notification.hook_type == "PermissionRequest" {
         log::info!("Skipping PermissionRequest (--dangerously-skip-permissions)");
+        log_hook_permission_diagnostic(
+            &state,
+            &notification,
+            &agent_kind,
+            None,
+            "Skipped",
+            format!(
+                "skip_permissions=true; approval_hint={}; payload_keys={}",
+                notification.approval_hint.as_deref().unwrap_or("none"),
+                hook_payload_keys_summary(&notification)
+            ),
+            true,
+        );
         state.log_hook_event(HookEvent {
             timestamp: Utc::now().format("%H:%M:%S%.3f").to_string(),
             hook_type: notification.hook_type.clone(),
@@ -1410,7 +1662,8 @@ async fn handle_hook_request(
         let body = "skipped:skip_permissions";
         let response = format!(
             "HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n{}",
-            body.len(), body
+            body.len(),
+            body
         );
         let _ = stream.write_all(response.as_bytes()).await;
         return;
@@ -1421,12 +1674,14 @@ async fn handle_hook_request(
     if notification.hook_type == "Notification" {
         let recently_stopped = {
             let sessions = state.sessions.read();
-            let matching_sid = sessions.values()
+            let matching_sid = sessions
+                .values()
                 .find(|s| s.project_path.as_deref() == Some(&notification.cwd))
                 .map(|s| s.id.clone());
             if let Some(ref sid) = matching_sid {
                 let stops = state.stop_timestamps.read();
-                stops.get(sid)
+                stops
+                    .get(sid)
                     .map(|t| t.elapsed().as_secs() < HOOK_GRACE_PERIOD_SECS)
                     .unwrap_or(false)
             } else {
@@ -1449,7 +1704,8 @@ async fn handle_hook_request(
             let body = "skipped:stop_recently";
             let response = format!(
                 "HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n{}",
-                body.len(), body
+                body.len(),
+                body
             );
             let _ = stream.write_all(response.as_bytes()).await;
             return;
@@ -1460,8 +1716,7 @@ async fn handle_hook_request(
     let settings = load_settings();
 
     // Determine new state and notification info
-    let hook_info: Option<(SessionState, &str, &str)> = match notification.hook_type.as_str()
-    {
+    let hook_info: Option<(SessionState, &str, &str)> = match notification.hook_type.as_str() {
         "PermissionRequest" => Some((
             SessionState::AwaitingPermission,
             "Agent needs permission to continue",
@@ -1477,11 +1732,7 @@ async fn handle_hook_request(
             "Agent has finished processing",
             "Task Complete",
         )),
-        "SessionStart" => Some((
-            SessionState::Processing,
-            "Session started",
-            "Welcome Back",
-        )),
+        "SessionStart" => Some((SessionState::Processing, "Session started", "Welcome Back")),
         "PostToolUse" => Some((SessionState::Processing, "", "")),
         _ => None,
     };
@@ -1492,7 +1743,8 @@ async fn handle_hook_request(
             let body = "unknown_hook";
             let response = format!(
                 "HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n{}",
-                body.len(), body
+                body.len(),
+                body
             );
             let _ = stream.write_all(response.as_bytes()).await;
             return;
@@ -1507,9 +1759,11 @@ async fn handle_hook_request(
             .as_ref()
             .and_then(|hook_session_id| sessions.get(hook_session_id));
         // Exact match
-        let found = found.or_else(|| sessions
-            .values()
-            .find(|s| s.project_path.as_deref() == Some(&notification.cwd)));
+        let found = found.or_else(|| {
+            sessions
+                .values()
+                .find(|s| s.project_path.as_deref() == Some(&notification.cwd))
+        });
         // Prefix match: hook cwd starts with session path or vice versa
         let found = found.or_else(|| {
             sessions.values().find(|s| {
@@ -1520,31 +1774,23 @@ async fn handle_hook_request(
                 }
             })
         });
-        found.map(|s| (s.id.clone(), s.project_name.clone())).unzip()
+        found
+            .map(|s| (s.id.clone(), s.project_name.clone()))
+            .unzip()
     };
     let mut session_id: Option<String> = session_id;
     let mut project_name: Option<String> = project_name;
 
     if session_id.is_none() {
-        let tmux_target = notification.tmux.as_ref().and_then(|tmux_ctx| {
-            if !tmux_ctx.session.is_empty() && !tmux_ctx.window.is_empty() {
-                let pane = if tmux_ctx.pane.is_empty() { "0" } else { &tmux_ctx.pane };
-                Some(format!("{}:{}.{}", tmux_ctx.session, tmux_ctx.window, pane))
-            } else {
-                None
-            }
-        }).or_else(|| {
-            infer_tmux_target(
-                Some(&notification.cwd),
-                notification.terminal_tty.as_deref(),
-            )
-        });
+        let tmux_target = tmux_target_from_hook(&notification);
         let fallback_hook_id = notification
             .session_id
             .as_ref()
             .map(|id| format!("hook:{}:{}", agent_kind, id));
 
-        if tmux_target.is_some() || fallback_hook_id.is_some() {
+        if tmux_target.is_some()
+            || (fallback_hook_id.is_some() && notification.terminal_tty.is_some())
+        {
             let sid = tmux_target
                 .as_ref()
                 .map(|target| format!("tmux:{}", target))
@@ -1595,17 +1841,100 @@ async fn handle_hook_request(
 
             state.sessions.write().insert(sid.clone(), session.clone());
             let _ = app_handle.emit("session-update", session);
+            if new_state == SessionState::AwaitingPermission {
+                log_hook_permission_diagnostic(
+                    &state,
+                    &notification,
+                    &agent_kind,
+                    Some(sid.clone()),
+                    "AwaitingPermission",
+                    format!(
+                        "PermissionRequest created session; skip_permissions={}; approval_hint={}; payload_keys={}",
+                        notification.skip_permissions,
+                        notification.approval_hint.as_deref().unwrap_or("none"),
+                        hook_payload_keys_summary(&notification)
+                    ),
+                    false,
+                );
+            }
             session_id = Some(sid);
             project_name = Some(name);
+        } else if fallback_hook_id.is_some() {
+            log::info!(
+                "Hook: ignoring unresolved hook-only session without tmux/tty context ({})",
+                notification.cwd
+            );
+            if new_state == SessionState::AwaitingPermission {
+                log_hook_permission_diagnostic(
+                    &state,
+                    &notification,
+                    &agent_kind,
+                    None,
+                    "Skipped",
+                    format!(
+                        "PermissionRequest had no tmux/tty context; skip_permissions={}; approval_hint={}; payload_keys={}",
+                        notification.skip_permissions,
+                        notification.approval_hint.as_deref().unwrap_or("none"),
+                        hook_payload_keys_summary(&notification)
+                    ),
+                    true,
+                );
+            }
+            state.log_hook_event(HookEvent {
+                timestamp: Utc::now().format("%H:%M:%S%.3f").to_string(),
+                hook_type: notification.hook_type.clone(),
+                agent_kind: agent_kind.clone(),
+                cwd: notification.cwd.clone(),
+                matched_session: None,
+                new_state: format!("{:?}", new_state),
+                skipped: true,
+                skip_reason: Some("no tmux or terminal context".to_string()),
+            });
         }
     }
 
     if let Some(ref sid) = session_id {
+        let unresolved_without_context = {
+            let sessions = state.sessions.read();
+            sessions
+                .get(sid)
+                .map(|s| {
+                    is_unresolved_hook_session(s) && tmux_target_from_hook(&notification).is_none()
+                })
+                .unwrap_or(false)
+        };
+
+        if unresolved_without_context {
+            state.sessions.write().remove(sid);
+            let _ = app_handle.emit("session-removed", sid.clone());
+            state.log_hook_event(HookEvent {
+                timestamp: Utc::now().format("%H:%M:%S%.3f").to_string(),
+                hook_type: notification.hook_type.clone(),
+                agent_kind: agent_kind.clone(),
+                cwd: notification.cwd.clone(),
+                matched_session: Some(sid.clone()),
+                new_state: format!("{:?}", new_state),
+                skipped: true,
+                skip_reason: Some("removed unresolved hook-only session".to_string()),
+            });
+            let body = "skipped:no_tmux_context";
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            let _ = stream.write_all(response.as_bytes()).await;
+            return;
+        }
+
         // Check if we should skip this state change
         let should_skip = {
             let sessions = state.sessions.read();
-            sessions.get(sid)
-                .map(|s| s.state == SessionState::Complete && new_state == SessionState::AwaitingInput)
+            sessions
+                .get(sid)
+                .map(|s| {
+                    s.state == SessionState::Complete && new_state == SessionState::AwaitingInput
+                })
                 .unwrap_or(false)
         };
 
@@ -1624,10 +1953,28 @@ async fn handle_hook_request(
             let body = format!("matched:{}", sid);
             let response = format!(
                 "HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n{}",
-                body.len(), body
+                body.len(),
+                body
             );
             let _ = stream.write_all(response.as_bytes()).await;
             return;
+        }
+
+        if new_state == SessionState::AwaitingPermission {
+            log_hook_permission_diagnostic(
+                &state,
+                &notification,
+                &agent_kind,
+                Some(sid.clone()),
+                "AwaitingPermission",
+                format!(
+                    "PermissionRequest updated session; skip_permissions={}; approval_hint={}; payload_keys={}",
+                    notification.skip_permissions,
+                    notification.approval_hint.as_deref().unwrap_or("none"),
+                    hook_payload_keys_summary(&notification)
+                ),
+                false,
+            );
         }
 
         let mut sessions = state.sessions.write();
@@ -1642,19 +1989,7 @@ async fn handle_hook_request(
                 session.terminal_tty = notification.terminal_tty.clone();
             }
             if session.tmux_target.is_none() {
-                session.tmux_target = notification.tmux.as_ref().and_then(|tmux_ctx| {
-                    if !tmux_ctx.session.is_empty() && !tmux_ctx.window.is_empty() {
-                        let pane = if tmux_ctx.pane.is_empty() { "0" } else { &tmux_ctx.pane };
-                        Some(format!("{}:{}.{}", tmux_ctx.session, tmux_ctx.window, pane))
-                    } else {
-                        None
-                    }
-                }).or_else(|| {
-                    infer_tmux_target(
-                        Some(&notification.cwd),
-                        notification.terminal_tty.as_deref(),
-                    )
-                });
+                session.tmux_target = tmux_target_from_hook(&notification);
             }
 
             // Set pending action for permission requests
@@ -1698,10 +2033,16 @@ async fn handle_hook_request(
                 skip_reason: None,
             });
             // Mark this session as recently updated by hook
-            state.hook_timestamps.write().insert(sid.clone(), std::time::Instant::now());
+            state
+                .hook_timestamps
+                .write()
+                .insert(sid.clone(), std::time::Instant::now());
             // Track Stop hooks so we can suppress the Notification that follows
             if notification.hook_type == "Stop" {
-                state.stop_timestamps.write().insert(sid.clone(), std::time::Instant::now());
+                state
+                    .stop_timestamps
+                    .write()
+                    .insert(sid.clone(), std::time::Instant::now());
             }
             let _ = app_handle.emit("session-update", session_clone);
 
@@ -1796,7 +2137,8 @@ async fn handle_hook_request(
     };
     let response = format!(
         "HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n{}",
-        body.len(), body
+        body.len(),
+        body
     );
     let _ = stream.write_all(response.as_bytes()).await;
 }
@@ -1811,7 +2153,11 @@ async fn start_hook_server(
     let listener = match TcpListener::bind(&addr).await {
         Ok(l) => l,
         Err(e) => {
-            log::error!("Failed to bind hook server on {}: {} — is another C3 instance running?", addr, e);
+            log::error!(
+                "Failed to bind hook server on {}: {} — is another C3 instance running?",
+                addr,
+                e
+            );
             return;
         }
     };
@@ -1863,6 +2209,9 @@ pub fn run() {
             get_available_terminals,
             get_session_meta,
             update_session_meta,
+            upsert_session_group,
+            delete_session_group,
+            assign_session_group,
             create_new_task,
             check_hook_status,
             setup_hooks,
@@ -1895,19 +2244,17 @@ pub fn run() {
             let _tray = TrayIconBuilder::new()
                 .menu(&tray_menu)
                 .menu_on_left_click(true)
-                .on_menu_event(|app, event| {
-                    match event.id().as_ref() {
-                        "show" => {
-                            if let Some(window) = app.get_webview_window("main") {
-                                let _ = window.show();
-                                let _ = window.set_focus();
-                            }
+                .on_menu_event(|app, event| match event.id().as_ref() {
+                    "show" => {
+                        if let Some(window) = app.get_webview_window("main") {
+                            let _ = window.show();
+                            let _ = window.set_focus();
                         }
-                        "quit" => {
-                            app.exit(0);
-                        }
-                        _ => {}
                     }
+                    "quit" => {
+                        app.exit(0);
+                    }
+                    _ => {}
                 })
                 .build(app)?;
 

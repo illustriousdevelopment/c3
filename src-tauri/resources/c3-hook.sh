@@ -28,27 +28,41 @@ TOOL_NAME=$(echo "$HOOK_DATA" | jq -r '.tool_name // .tool // empty' 2>/dev/null
 TOOL_INPUT=$(echo "$HOOK_DATA" | jq -c '.tool_input // .input // null' 2>/dev/null)
 SESSION_ID=$(echo "$HOOK_DATA" | jq -r '.session_id // empty' 2>/dev/null)
 
-# Check if running with --dangerously-skip-permissions
-# Look at the parent agent process command line
+# Check if running with a dangerous/no-approval mode.
+# Hooks are often launched through shell shims, so inspect the ancestor process tree.
 SKIP_PERMS=false
-CLAUDE_PID=$(pgrep -P "$$" -f claude 2>/dev/null || echo "")
-if [ -z "$CLAUDE_PID" ]; then
-    # Try finding claude in the process tree
-    CLAUDE_PID=$(ps -o ppid= -p $$ 2>/dev/null | tr -d ' ')
-fi
-if [ -n "$CLAUDE_PID" ]; then
-    CLAUDE_CMD=$(ps -o command= -p "$CLAUDE_PID" 2>/dev/null)
-    if [ -z "$AGENT_KIND" ]; then
-        if echo "$CLAUDE_CMD" | grep -qi "codex"; then
-            AGENT_KIND="codex"
-        elif echo "$CLAUDE_CMD" | grep -qi "claude"; then
-            AGENT_KIND="claude"
-        fi
+APPROVAL_HINT=""
+PROCESS_TREE=""
+CURRENT_PID=$$
+ANCESTOR_DEPTH=0
+while [ -n "$CURRENT_PID" ] && [ "$CURRENT_PID" != "0" ] && [ "$CURRENT_PID" != "1" ] && [ "$ANCESTOR_DEPTH" -lt 12 ]; do
+    PROC_CMD=$(ps -o command= -p "$CURRENT_PID" 2>/dev/null || true)
+    PROC_PPID=$(ps -o ppid= -p "$CURRENT_PID" 2>/dev/null | tr -d ' ' || true)
+    if [ -n "$PROC_CMD" ]; then
+        PROCESS_TREE="${PROCESS_TREE}
+${PROC_CMD}"
     fi
-    if echo "$CLAUDE_CMD" | grep -q "dangerously-skip-permissions"; then
-        SKIP_PERMS=true
+    CURRENT_PID="$PROC_PPID"
+    ANCESTOR_DEPTH=$((ANCESTOR_DEPTH + 1))
+done
+
+if [ -z "$AGENT_KIND" ]; then
+    if echo "$PROCESS_TREE" | grep -qi "codex"; then
+        AGENT_KIND="codex"
+    elif echo "$PROCESS_TREE" | grep -qi "claude"; then
+        AGENT_KIND="claude"
     fi
 fi
+
+if echo "$PROCESS_TREE" | grep -Eq "dangerously-skip-permissions|dangerously-bypass-approvals-and-sandbox|--ask-for-approval[= ]never|-a[= ]?never"; then
+    SKIP_PERMS=true
+    APPROVAL_HINT="process-flag"
+elif echo "$HOOK_DATA" | jq -e '.. | strings | select(test("dangerously-skip-permissions|dangerously-bypass-approvals-and-sandbox|--ask-for-approval[= ]never|approval[_-]?policy[=: ]+never|ask[_-]?for[_-]?approval[=: ]+never"; "i"))' >/dev/null 2>&1; then
+    SKIP_PERMS=true
+    APPROVAL_HINT="hook-payload"
+fi
+
+HOOK_PAYLOAD_KEYS=$(echo "$HOOK_DATA" | jq -c 'if type == "object" then keys else [] end' 2>/dev/null || echo "[]")
 
 if [ -z "$AGENT_KIND" ]; then
     if echo "$HOOK_DATA" | jq -e '.. | strings | select(test("codex"; "i"))' >/dev/null 2>&1; then
@@ -81,6 +95,8 @@ PAYLOAD=$(jq -n \
   --arg tool_name "$TOOL_NAME" \
   --argjson tool_input "${TOOL_INPUT:-null}" \
   --argjson skip_perms "$SKIP_PERMS" \
+  --arg approval_hint "$APPROVAL_HINT" \
+  --argjson hook_payload_keys "${HOOK_PAYLOAD_KEYS:-[]}" \
   --arg tmux_session "$TMUX_SESSION_NAME" \
   --arg tmux_window "$TMUX_WINDOW_INDEX" \
   --arg tmux_pane "$TMUX_PANE_INDEX" \
@@ -94,6 +110,8 @@ PAYLOAD=$(jq -n \
     tool_name: (if $tool_name == "" then null else $tool_name end),
     tool_input: $tool_input,
     skip_permissions: $skip_perms,
+    approval_hint: (if $approval_hint == "" then null else $approval_hint end),
+    hook_payload_keys: $hook_payload_keys,
     tmux: {
       session: $tmux_session,
       window: $tmux_window,
