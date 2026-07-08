@@ -45,7 +45,7 @@ export interface C3Session {
   id: string;
   projectName: string;
   projectPath?: string;
-  agentKind?: 'claude' | 'codex' | 'unknown';
+  agentKind?: 'claude' | 'codex' | 'omp' | 'unknown';
   state: SessionState;
   tmuxTarget?: string;
   terminalTty?: string;
@@ -72,6 +72,7 @@ export interface HookStatus {
   hooks_installed: boolean;
   claude_hooks_installed: boolean;
   codex_hooks_installed: boolean;
+  omp_hooks_installed: boolean;
   hook_script_exists: boolean;
   jq_installed: boolean;
   terminal_notifier_installed: boolean;

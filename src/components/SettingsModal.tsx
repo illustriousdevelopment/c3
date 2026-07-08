@@ -246,7 +246,7 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
           <div className="settings-group">
             <label className="settings-label">Setup Hooks</label>
             <p className="settings-description">
-              Install C3 hooks into Claude Code and Codex for real-time session tracking.
+              Install C3 hooks into Claude Code, Codex, and OMP for real-time session tracking.
             </p>
 
             <div className="hook-status">
@@ -266,6 +266,13 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
                 <span className="hook-status-label">Codex hooks</span>
                 <span className={`hook-status-badge ${hookStatus?.codex_hooks_installed ? 'installed' : 'not-installed'}`}>
                   {hookStatus?.codex_hooks_installed ? <><Check size={12} /> Installed</> : <><X size={12} /> Not installed</>}
+                </span>
+              </div>
+
+              <div className="hook-status-row">
+                <span className="hook-status-label">OMP hooks</span>
+                <span className={`hook-status-badge ${hookStatus?.omp_hooks_installed ? 'installed' : 'not-installed'}`}>
+                  {hookStatus?.omp_hooks_installed ? <><Check size={12} /> Installed</> : <><X size={12} /> Not installed</>}
                 </span>
               </div>
 

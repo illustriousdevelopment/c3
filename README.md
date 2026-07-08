@@ -4,9 +4,9 @@
 
 # C3 — Carmelo Command Center
 
-C3 is a visualizer and control center for Claude Code and Codex terminal sessions running in tmux.
+C3 is a visualizer and control center for Claude Code, Codex, and OMP terminal sessions running in tmux.
 
-When running lots of projects in parallel, C3 makes it easier to see which agent needs attention, jump back to the right tmux pane, and keep Claude Code and Codex sessions organized from one small desktop app.
+When running lots of projects in parallel, C3 makes it easier to see which agent needs attention, jump back to the right tmux pane, and keep Claude Code, Codex, and OMP sessions organized from one small desktop app.
 
 <p align="center">
   <img src="public/C3-Example.png" width="800" alt="C3 screenshot" />
@@ -14,8 +14,8 @@ When running lots of projects in parallel, C3 makes it easier to see which agent
 
 ## Features
 
-- **Claude Code + Codex support** — Track both agent types with the same session model
-- **Real-time session monitoring** — See active Claude Code and Codex sessions at a glance
+- **Claude Code + Codex + OMP support** — Track all three agent types with the same session model
+- **Real-time session monitoring** — See active Claude Code, Codex, and OMP sessions at a glance
 - **State glyphs** — Compact status badges show permission, idle, working, complete, and error states
 - **Desktop notifications** — macOS notifications via terminal-notifier with click-to-focus on the right tmux pane
 - **Background mode** — Close the window and C3 keeps running in the menu bar, still sending notifications
@@ -30,7 +30,7 @@ When running lots of projects in parallel, C3 makes it easier to see which agent
 
 - macOS
 - [tmux](https://github.com/tmux/tmux)
-- [Claude Code](https://docs.anthropic.com/en/docs/claude-code), Codex, or both
+- [Claude Code](https://docs.anthropic.com/en/docs/claude-code), Codex, OMP, or any combination
 - [jq](https://jqlang.github.io/jq/) — for hook script JSON processing
 - [terminal-notifier](https://github.com/julienXX/terminal-notifier) — for desktop notifications with click-to-focus
 
@@ -47,7 +47,7 @@ brew install --cask c3
 
 Download the latest `.dmg` from [Releases](https://github.com/illustriousdevelopment/c3/releases), open it, and drag C3 to Applications.
 
-Current release: [v0.2.9](https://github.com/illustriousdevelopment/c3/releases/tag/v0.2.9)
+Current release: [v0.2.11](https://github.com/illustriousdevelopment/c3/releases/tag/v0.2.11)
 
 ## Setup
 
@@ -60,6 +60,7 @@ Open C3, go to **Settings** (gear icon), and click **Install C3 Hooks**. This wi
 3. Install the notification icon to `~/.config/c3/icon.png`
 4. Configure Claude Code hooks in `~/.claude/settings.json`
 5. Configure Codex hooks in `~/.codex/hooks.json`
+6. Configure OMP hooks in `~/.omp/agent/hooks/post/c3-notify.ts`
 
 ### CLI setup
 
@@ -80,7 +81,7 @@ See [hooks/SETUP.md](hooks/SETUP.md) for step-by-step instructions.
 ## Usage
 
 1. Start C3
-2. Open Claude Code or Codex in tmux panes as usual
+2. Open Claude Code, Codex, or OMP in tmux panes as usual
 3. Sessions appear automatically in the C3 dashboard
 4. Close the window — C3 keeps running in the menu bar and still sends notifications
 5. Click the tray icon or use "Show C3" to bring the window back
@@ -107,11 +108,11 @@ The kill action only targets tmux-backed sessions. C3 will not kill an arbitrary
 
 C3 uses two mechanisms to track agent sessions:
 
-1. **Hooks** (primary) — Claude Code and Codex hooks fire shell commands on `PermissionRequest`, `Notification`, `Stop`, and `SessionStart` events. The `c3-hook.sh` script sends these to C3's local HTTP endpoint (`http://127.0.0.1:9398/hook`), which updates session state and fires desktop notifications via terminal-notifier. Hook payloads include agent kind, cwd, terminal tty, and tmux context when available.
+1. **Hooks** (primary) — Claude Code, Codex, and OMP hooks fire shell commands on `PermissionRequest`, `Notification`, `Stop`, and `SessionStart` events. The `c3-hook.sh` script sends these to C3's local HTTP endpoint (`http://127.0.0.1:9398/hook`), which updates session state and fires desktop notifications via terminal-notifier. Hook payloads include agent kind, cwd, terminal tty, and tmux context when available.
 
-2. **Tmux scanner** (fallback) — Periodically scans tmux for panes running Claude Code or Codex, parsing conversation files from `~/.claude/projects/` and `~/.codex/sessions/` to determine state. Lower frequency, but useful when a hook was missed or a session was already running before C3 started.
+2. **Tmux scanner** (fallback) — Periodically scans tmux for panes running Claude Code, Codex, or OMP, parsing conversation files from `~/.claude/projects/`, `~/.codex/sessions/`, and `~/.omp/agent/sessions/` to determine state. Lower frequency, but useful when a hook was missed or a session was already running before C3 started.
 
-Codex and Claude sessions are intentionally treated as the same kind of work item in the UI: an agent running in a tmux pane that may need focus, approval, input, or cleanup.
+Claude Code, Codex, and OMP sessions are intentionally treated as the same kind of work item in the UI: an agent running in a tmux pane that may need focus, approval, input, or cleanup.
 
 ## Development
 

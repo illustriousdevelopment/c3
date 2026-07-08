@@ -1,6 +1,6 @@
 # C3 Hooks Setup
 
-This document explains how to configure Claude Code and Codex to send real-time notifications to the C3 app.
+This document explains how to configure Claude Code, Codex, and OMP to send real-time notifications to the C3 app.
 
 ## Quick Setup
 
@@ -18,7 +18,13 @@ This document explains how to configure Claude Code and Codex to send real-time 
    chmod +x ~/.local/bin/c3-hook.sh
    ```
 
-2. **Add hooks to Claude Code settings** (`~/.claude/settings.json`):
+2. **For OMP**, copy the TypeScript hook into your agent hooks directory:
+   ```bash
+   mkdir -p ~/.omp/agent/hooks/post
+   cp hooks/c3-omp-hook.ts ~/.omp/agent/hooks/post/c3-notify.ts
+   ```
+
+3. **Add hooks to Claude Code settings** (`~/.claude/settings.json`):
    ```json
    {
      "hooks": {
@@ -50,15 +56,17 @@ This document explains how to configure Claude Code and Codex to send real-time 
    }
    ```
 
-3. **For Codex**, add the same hook shape to `~/.codex/hooks.json`, using `C3_AGENT_KIND=codex` before the hook command.
+4. **For Codex**, add the same hook shape to `~/.codex/hooks.json`, using `C3_AGENT_KIND=codex` before the hook command.
 
-4. **Restart Claude Code and Codex** to pick up the new hooks.
+5. **For OMP**, the TypeScript hook installed in step 2 handles notifications automatically. No JSON configuration is required.
+
+6. **Restart Claude Code, Codex, and OMP** to pick up the new hooks.
 
 ## How It Works
 
 - **PermissionRequest**: Fires when a permission dialog appears (triggers "Awaiting Permission" state)
-- **Notification**: Fires when Claude wants your attention (triggers "Awaiting Input" state)
-- **Stop**: Fires when Claude finishes responding (triggers "Complete" state)
+- **Notification**: Fires when the agent wants your attention or has finished a turn (triggers "Awaiting Input" state)
+- **Stop**: Fires when the agent finishes responding or a session shuts down (triggers "Complete" state)
 - **SessionStart**: Fires when a new session starts (triggers "Processing" state)
 
 The hook script sends a JSON notification to C3's HTTP endpoint at `http://127.0.0.1:9398/hook`.

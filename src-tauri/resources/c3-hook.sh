@@ -1,5 +1,5 @@
 #!/bin/bash
-# C3 Hook Script for Claude Code and Codex
+# C3 Hook Script for Claude Code, Codex, and OMP
 # Replaces notify-with-tmux.sh — C3 handles notifications, sounds, and UI updates.
 #
 # Install:
@@ -7,7 +7,7 @@
 #   cp c3-hook.sh ~/.local/bin/c3-hook.sh
 #   chmod +x ~/.local/bin/c3-hook.sh
 #
-# Then configure Claude Code or Codex hooks to call this script.
+# Then configure Claude Code, Codex, or OMP hooks to call this script.
 
 C3_HOOK_URL="${C3_HOOK_URL:-http://127.0.0.1:9398/hook}"
 
@@ -49,6 +49,8 @@ done
 if [ -z "$AGENT_KIND" ]; then
     if echo "$PROCESS_TREE" | grep -qi "codex"; then
         AGENT_KIND="codex"
+    elif echo "$PROCESS_TREE" | grep -qi "omp"; then
+        AGENT_KIND="omp"
     elif echo "$PROCESS_TREE" | grep -qi "claude"; then
         AGENT_KIND="claude"
     fi
@@ -67,6 +69,8 @@ HOOK_PAYLOAD_KEYS=$(echo "$HOOK_DATA" | jq -c 'if type == "object" then keys els
 if [ -z "$AGENT_KIND" ]; then
     if echo "$HOOK_DATA" | jq -e '.. | strings | select(test("codex"; "i"))' >/dev/null 2>&1; then
         AGENT_KIND="codex"
+    elif echo "$HOOK_DATA" | jq -e '.. | strings | select(test("omp"; "i"))' >/dev/null 2>&1; then
+        AGENT_KIND="omp"
     else
         AGENT_KIND="claude"
     fi

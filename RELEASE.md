@@ -29,7 +29,7 @@ After the build, mount the DMG once and confirm the contained app was signed
 during the current release build, not an older cached build:
 
 ```bash
-hdiutil attach src-tauri/target/release/bundle/dmg/C3_0.2.10_aarch64.dmg -nobrowse
+hdiutil attach src-tauri/target/release/bundle/dmg/C3_0.2.11_aarch64.dmg -nobrowse
 codesign -dv --verbose=4 /Volumes/C3/C3.app 2>&1 | grep -E 'CDHash=|Timestamp='
 hdiutil detach /Volumes/C3
 ```
@@ -54,7 +54,7 @@ xcrun notarytool store-credentials c3-notary \
 Submit the DMG and wait for Apple's response:
 
 ```bash
-xcrun notarytool submit src-tauri/target/release/bundle/dmg/C3_0.2.10_aarch64.dmg \
+xcrun notarytool submit src-tauri/target/release/bundle/dmg/C3_0.2.11_aarch64.dmg \
   --keychain-profile c3-notary \
   --wait
 ```
@@ -62,7 +62,7 @@ xcrun notarytool submit src-tauri/target/release/bundle/dmg/C3_0.2.10_aarch64.dm
 Staple the notarization ticket:
 
 ```bash
-xcrun stapler staple src-tauri/target/release/bundle/dmg/C3_0.2.10_aarch64.dmg
+xcrun stapler staple src-tauri/target/release/bundle/dmg/C3_0.2.11_aarch64.dmg
 ```
 
 ## Verification
@@ -70,13 +70,13 @@ xcrun stapler staple src-tauri/target/release/bundle/dmg/C3_0.2.10_aarch64.dmg
 Verify the stapled ticket:
 
 ```bash
-xcrun stapler validate src-tauri/target/release/bundle/dmg/C3_0.2.10_aarch64.dmg
+xcrun stapler validate src-tauri/target/release/bundle/dmg/C3_0.2.11_aarch64.dmg
 ```
 
 Verify Gatekeeper acceptance:
 
 ```bash
-spctl -a -vvv -t install src-tauri/target/release/bundle/dmg/C3_0.2.10_aarch64.dmg
+spctl -a -vvv -t install src-tauri/target/release/bundle/dmg/C3_0.2.11_aarch64.dmg
 ```
 
 The Gatekeeper check must report:
@@ -89,7 +89,7 @@ source=Notarized Developer ID
 Confirm the DMG signature details:
 
 ```bash
-codesign -dv --verbose=4 src-tauri/target/release/bundle/dmg/C3_0.2.10_aarch64.dmg
+codesign -dv --verbose=4 src-tauri/target/release/bundle/dmg/C3_0.2.11_aarch64.dmg
 ```
 
 Expected details include:
@@ -105,13 +105,13 @@ Notarization Ticket=stapled
 Replace the GitHub release asset only after the DMG passes verification:
 
 ```bash
-gh release upload v0.2.10 src-tauri/target/release/bundle/dmg/C3_0.2.10_aarch64.dmg --clobber
+gh release upload v0.2.11 src-tauri/target/release/bundle/dmg/C3_0.2.11_aarch64.dmg --clobber
 ```
 
 Verify the release asset:
 
 ```bash
-gh release view v0.2.10 --json url,assets --jq '.url, (.assets[] | select(.name=="C3_0.2.10_aarch64.dmg") | {name,url,size: .size})'
+gh release view v0.2.11 --json url,assets --jq '.url, (.assets[] | select(.name=="C3_0.2.11_aarch64.dmg") | {name,url,size: .size})'
 ```
 
 ## In-App Update Indicator
@@ -125,8 +125,8 @@ https://api.github.com/repos/illustriousdevelopment/c3/releases/latest
 The update indicator compares the installed app version to the latest release tag, then opens the first matching DMG asset when clicked. Keep the release tag and DMG asset name aligned with the app version:
 
 ```text
-v0.2.10
-C3_0.2.10_aarch64.dmg
+v0.2.11
+C3_0.2.11_aarch64.dmg
 ```
 
 After publishing a release, the newest GitHub release must contain a notarized `.dmg` asset or the in-app update button will fall back to the release page.

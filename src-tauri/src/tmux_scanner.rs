@@ -83,14 +83,17 @@ fn find_agent_panes() -> Vec<AgentPane> {
             || is_claude_version_binary(pane_command);
         let is_active_codex =
             pane_command.contains("codex") || (pane_command == "node" && is_child_codex(pane_pid));
+        let is_active_omp = pane_command.contains("omp") || (pane_command == "node" && is_child_omp(pane_pid));
 
         // Also detect completed sessions (back to shell but title has marker)
         let has_claude_title = pane_title.contains('✳') || pane_title.contains("Claude");
         let has_codex_title = pane_title.contains("Codex") || pane_title.contains("codex");
+        let has_omp_title = pane_title.contains("OMP") || pane_title.contains("omp");
 
         if is_active_claude
             || is_active_codex
-            || ((has_claude_title || has_codex_title) && pane_command == "zsh")
+            || is_active_omp
+            || ((has_claude_title || has_codex_title || has_omp_title) && pane_command == "zsh")
         {
             panes.push(AgentPane {
                 target: target.to_string(),
@@ -98,7 +101,9 @@ fn find_agent_panes() -> Vec<AgentPane> {
                 pane_title: pane_title.to_string(),
                 window_name: window_name.to_string(),
                 pane_command: pane_command.to_string(),
-                agent_kind: if is_active_codex || has_codex_title {
+                agent_kind: if is_active_omp || has_omp_title {
+                    "omp".to_string()
+                } else if is_active_codex || has_codex_title {
                     "codex".to_string()
                 } else {
                     "claude".to_string()
@@ -115,6 +120,15 @@ fn is_child_claude(pane_pid: &str) -> bool {
     // pgrep for claude as a child of the pane process
     cmd("pgrep")
         .args(["-P", pane_pid, "-f", "claude"])
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+}
+
+/// Check if any child process of the given PID is omp
+fn is_child_omp(pane_pid: &str) -> bool {
+    cmd("pgrep")
+        .args(["-P", pane_pid, "-f", "omp"])
         .output()
         .map(|o| o.status.success())
         .unwrap_or(false)
@@ -239,6 +253,73 @@ fn find_active_codex_jsonl(cwd: &str) -> Option<PathBuf> {
         .into_iter()
         .take(200)
         .find(|path| codex_jsonl_matches_cwd(path, cwd))
+}
+
+fn omp_sessions_dir() -> PathBuf {
+    dirs_next()
+        .unwrap_or_else(|| PathBuf::from("/tmp"))
+        .join(".omp")
+        .join("agent")
+        .join("sessions")
+}
+
+fn collect_omp_jsonl_matches(dir: &Path, cwd: &str, out: &mut Vec<PathBuf>) {
+    let entries = match fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(_) => return,
+    };
+
+    for entry in entries.filter_map(|e| e.ok()) {
+        let path = entry.path();
+        if path.is_dir() {
+            collect_omp_jsonl_matches(&path, cwd, out);
+        } else if path.extension().map(|ext| ext == "jsonl").unwrap_or(false) {
+            if omp_jsonl_matches_cwd(&path, cwd) {
+                out.push(path);
+            }
+        }
+    }
+}
+
+fn omp_jsonl_matches_cwd(path: &Path, cwd: &str) -> bool {
+    let file = match fs::File::open(path) {
+        Ok(file) => file,
+        Err(_) => return false,
+    };
+
+    for line in BufReader::new(file).lines().filter_map(|l| l.ok()).take(5) {
+        let parsed: serde_json::Value = match serde_json::from_str(&line) {
+            Ok(parsed) => parsed,
+            Err(_) => continue,
+        };
+
+        if parsed.get("type").and_then(|v| v.as_str()) != Some("session") {
+            continue;
+        }
+
+        if parsed.get("cwd").and_then(|v| v.as_str()) == Some(cwd) {
+            return true;
+        }
+    }
+
+    false
+}
+
+fn find_active_omp_jsonl(cwd: &str) -> Option<PathBuf> {
+    let sessions_dir = omp_sessions_dir();
+    if !sessions_dir.exists() {
+        return None;
+    }
+
+    let mut matches = Vec::new();
+    collect_omp_jsonl_matches(&sessions_dir, cwd, &mut matches);
+    matches.sort_by_key(|path| {
+        fs::metadata(path)
+            .and_then(|m| m.modified())
+            .unwrap_or(SystemTime::UNIX_EPOCH)
+    });
+    matches.reverse();
+    matches.into_iter().next()
 }
 
 /// Read the last N lines of a file (reads from end)
@@ -1179,6 +1260,9 @@ pub fn scan_tmux(state: &Arc<AppState>, app_handle: &AppHandle) {
             let last_msg_time = if pane.agent_kind == "codex" {
                 find_active_codex_jsonl(&pane.cwd)
                     .and_then(|jsonl| latest_timestamp_from_jsonl(&jsonl))
+            } else if pane.agent_kind == "omp" {
+                find_active_omp_jsonl(&pane.cwd)
+                    .and_then(|jsonl| latest_timestamp_from_jsonl(&jsonl))
             } else {
                 let project_dir = cwd_to_project_dir(&pane.cwd);
                 find_active_jsonl(&project_dir)
@@ -1203,6 +1287,16 @@ pub fn scan_tmux(state: &Arc<AppState>, app_handle: &AppHandle) {
                     last_message_time: None,
                 },
                 None => awaiting_input_state(None),
+            }
+        } else if pane.agent_kind == "omp" {
+            // OMP does not expose the same JSONL state as Claude/Codex, so rely on
+            // hooks for precise state changes and use the pane as a fallback.
+            let last_msg_time = find_active_omp_jsonl(&pane.cwd)
+                .and_then(|jsonl| latest_timestamp_from_jsonl(&jsonl));
+            ConversationState {
+                state: SessionState::Processing,
+                pending_action: None,
+                last_message_time: last_msg_time,
             }
         } else if title_starts_with_idle_marker {
             // ✳ means Claude Code is idle — check JSONL for AwaitingInput vs AwaitingPermission
@@ -1273,6 +1367,8 @@ pub fn scan_tmux(state: &Arc<AppState>, app_handle: &AppHandle) {
         let jsonl_activity = conv_state.last_message_time.unwrap_or_else(|| {
             let jsonl = if pane.agent_kind == "codex" {
                 find_active_codex_jsonl(&pane.cwd)
+            } else if pane.agent_kind == "omp" {
+                find_active_omp_jsonl(&pane.cwd)
             } else {
                 let project_dir = cwd_to_project_dir(&pane.cwd);
                 find_active_jsonl(&project_dir)

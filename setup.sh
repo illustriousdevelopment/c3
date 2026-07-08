@@ -2,6 +2,8 @@
 # C3 Setup Script
 # Installs hooks and checks dependencies for C3 (Carmelo Command Center)
 #
+# Supports Claude Code, Codex, and OMP (Oh My Pi).
+#
 # Usage:
 #   ./setup.sh
 #   curl -fsSL https://raw.githubusercontent.com/illustriousdevelopment/c3/main/setup.sh | bash
@@ -278,6 +280,38 @@ fi
 
 echo ""
 
+# ─── Install OMP hook ──────────────────────────────────────────────
+
+OMP_HOOK_SRC=""
+OMP_HOOK_DIR="$HOME/.omp/agent/hooks/post"
+OMP_HOOK_DEST="$OMP_HOOK_DIR/c3-notify.ts"
+
+info "Configuring OMP hook..."
+
+for candidate in "hooks/c3-omp-hook.ts" "src-tauri/resources/c3-omp-hook.ts" "$HOME/.local/share/c3/c3-omp-hook.ts"; do
+    if [ -f "$candidate" ]; then
+        OMP_HOOK_SRC="$candidate"
+        break
+    fi
+done
+
+if [ -z "$OMP_HOOK_SRC" ]; then
+    info "OMP hook not found locally, downloading..."
+    OMP_HOOK_SRC="/tmp/c3-omp-hook.ts"
+    curl -fsSL "https://raw.githubusercontent.com/illustriousdevelopment/c3/main/hooks/c3-omp-hook.ts" -o "$OMP_HOOK_SRC" 2>/dev/null || {
+        warn "Could not download c3-omp-hook.ts; OMP hook will not be installed"
+        OMP_HOOK_SRC=""
+    }
+fi
+
+if [ -n "$OMP_HOOK_SRC" ]; then
+    mkdir -p "$OMP_HOOK_DIR"
+    cp "$OMP_HOOK_SRC" "$OMP_HOOK_DEST"
+    ok "Installed OMP hook to $OMP_HOOK_DEST"
+fi
+
+echo ""
+
 # ─── Summary ─────────────────────────────────────────────────────────
 
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
@@ -286,9 +320,12 @@ echo ""
 echo "  Hook script:  $HOOK_DEST"
 echo "  Settings:     $SETTINGS_FILE"
 echo "  Codex hooks:  $CODEX_HOOKS_FILE"
+if [ -n "$OMP_HOOK_SRC" ]; then
+    echo "  OMP hook:     $OMP_HOOK_DEST"
+fi
 echo ""
 echo "Next steps:"
 echo "  1. Open C3"
-echo "  2. Restart any running Claude Code or Codex sessions"
+echo "  2. Restart any running Claude Code, Codex, or OMP sessions"
 echo "  3. Sessions will now appear in C3 automatically"
 echo ""

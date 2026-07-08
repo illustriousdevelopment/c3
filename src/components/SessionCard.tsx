@@ -78,6 +78,8 @@ function getAgentLabel(agentKind: string | undefined): string {
   switch (agentKind) {
     case 'codex':
       return 'Codex';
+    case 'omp':
+      return 'OMP';
     case 'claude':
       return 'Claude';
     default:

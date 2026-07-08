@@ -889,6 +889,7 @@ pub struct HookStatus {
     pub hooks_installed: bool,
     pub claude_hooks_installed: bool,
     pub codex_hooks_installed: bool,
+    pub omp_hooks_installed: bool,
     pub hook_script_exists: bool,
     pub jq_installed: bool,
     pub terminal_notifier_installed: bool,
@@ -945,6 +946,10 @@ fn check_hook_status(app_handle: AppHandle) -> HookStatus {
         false
     };
 
+    // Check if OMP hook is installed
+    let omp_hooks_dir = PathBuf::from(&home).join(".omp/agent/hooks/post");
+    let omp_hooks_installed = omp_hooks_dir.join("c3-notify.ts").exists();
+
     // Check dependencies
     let jq_installed = cmd("which")
         .arg("jq")
@@ -972,9 +977,10 @@ fn check_hook_status(app_handle: AppHandle) -> HookStatus {
         .map(|d| d.join("resources").join("c3-hook.sh"));
 
     HookStatus {
-        hooks_installed: hook_script_exists && (claude_hooks_installed || codex_hooks_installed),
+        hooks_installed: hook_script_exists && (claude_hooks_installed || codex_hooks_installed || omp_hooks_installed),
         claude_hooks_installed: claude_hooks_installed && hook_script_exists,
         codex_hooks_installed: codex_hooks_installed && hook_script_exists,
+        omp_hooks_installed: omp_hooks_installed && hook_script_exists,
         hook_script_exists,
         jq_installed,
         terminal_notifier_installed,
@@ -1257,10 +1263,44 @@ fn setup_hooks(app_handle: AppHandle) -> SetupResult {
         }
     }
 
+    // Step 7: Install OMP hook
+    let omp_hooks_dir = PathBuf::from(&home).join(".omp/agent/hooks/post");
+    if let Err(e) = fs::create_dir_all(&omp_hooks_dir) {
+        return SetupResult {
+            success: false,
+            message: format!("Failed to create ~/.omp/agent/hooks/post: {}", e),
+            backup_path: backup_path_str,
+        };
+    }
+
+    let omp_hook_source = app_handle
+        .path()
+        .resource_dir()
+        .ok()
+        .map(|d| d.join("resources").join("c3-omp-hook.ts"))
+        .filter(|p| p.exists());
+
+    if let Some(omp_hook_source) = omp_hook_source {
+        let omp_hook_dest = omp_hooks_dir.join("c3-notify.ts");
+        if let Err(e) = fs::copy(&omp_hook_source, &omp_hook_dest) {
+            return SetupResult {
+                success: false,
+                message: format!("Failed to install OMP hook: {}", e),
+                backup_path: backup_path_str,
+            };
+        }
+    } else if !omp_hooks_dir.join("c3-notify.ts").exists() {
+        return SetupResult {
+            success: false,
+            message: "Could not find c3-omp-hook.ts to install. Please run setup.sh from the C3 repo directory first.".to_string(),
+            backup_path: backup_path_str,
+        };
+    }
+
     SetupResult {
         success: true,
         message:
-            "C3 hooks installed successfully! Restart Claude Code and Codex sessions to activate."
+            "C3 hooks installed successfully! Restart Claude Code, Codex, and OMP sessions to activate."
                 .to_string(),
         backup_path: backup_path_str,
     }
@@ -1379,6 +1419,7 @@ struct HookNotification {
 fn normalize_agent_kind(agent_kind: Option<&str>) -> String {
     match agent_kind.unwrap_or("").to_ascii_lowercase().as_str() {
         "codex" => "codex".to_string(),
+        "omp" => "omp".to_string(),
         "claude" => "claude".to_string(),
         _ => "unknown".to_string(),
     }
