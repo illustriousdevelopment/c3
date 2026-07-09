@@ -76,6 +76,15 @@ if [ -z "$AGENT_KIND" ]; then
     fi
 fi
 
+# Old OMP hooks fired on every tool-loop/subagent turn and also emitted racy
+# lifecycle events. Accept only the current main-session stop hook. Because this
+# check lives in the shell script, it also quiets already-running old sessions.
+if [ "$AGENT_KIND" = "omp" ]; then
+    if [ "$HOOK_TYPE" != "Notification" ] || [ "${C3_OMP_HOOK_VERSION:-}" != "2" ]; then
+        exit 0
+    fi
+fi
+
 # Gather tmux context
 TMUX_SESSION_NAME=""
 TMUX_WINDOW_INDEX=""

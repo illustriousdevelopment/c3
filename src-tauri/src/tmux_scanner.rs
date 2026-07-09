@@ -83,12 +83,15 @@ fn find_agent_panes() -> Vec<AgentPane> {
             || is_claude_version_binary(pane_command);
         let is_active_codex =
             pane_command.contains("codex") || (pane_command == "node" && is_child_codex(pane_pid));
-        let is_active_omp = pane_command.contains("omp") || (pane_command == "node" && is_child_omp(pane_pid));
+        let is_active_omp = pane_command.contains("omp")
+            || ((pane_command == "node" || pane_command == "bun") && is_child_omp(pane_pid));
 
         // Also detect completed sessions (back to shell but title has marker)
         let has_claude_title = pane_title.contains('✳') || pane_title.contains("Claude");
         let has_codex_title = pane_title.contains("Codex") || pane_title.contains("codex");
-        let has_omp_title = pane_title.contains("OMP") || pane_title.contains("omp");
+        let has_omp_title = pane_title.contains("OMP")
+            || pane_title.contains("omp")
+            || pane_title.contains('π');
 
         if is_active_claude
             || is_active_codex
@@ -125,13 +128,26 @@ fn is_child_claude(pane_pid: &str) -> bool {
         .unwrap_or(false)
 }
 
-/// Check if any child process of the given PID is omp
+/// Check if any child process of the given PID is omp.
+/// macOS pgrep can miss Bun-launched scripts, so inspect the process table.
 fn is_child_omp(pane_pid: &str) -> bool {
-    cmd("pgrep")
-        .args(["-P", pane_pid, "-f", "omp"])
-        .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false)
+    let output = match cmd("ps").args(["-ax", "-o", "ppid=,command="]).output() {
+        Ok(output) if output.status.success() => output,
+        _ => return false,
+    };
+
+    String::from_utf8_lossy(&output.stdout).lines().any(|line| {
+        let trimmed = line.trim_start();
+        let parent_end = match trimmed.find(|c: char| c.is_whitespace()) {
+            Some(index) => index,
+            None => return false,
+        };
+        let (parent_pid, command) = trimmed.split_at(parent_end);
+        parent_pid == pane_pid
+            && command
+                .split_whitespace()
+                .any(|part| part == "omp" || part.ends_with("/omp"))
+    })
 }
 
 /// Check if any child process of the given PID is codex
@@ -322,6 +338,77 @@ fn find_active_omp_jsonl(cwd: &str) -> Option<PathBuf> {
     matches.into_iter().next()
 }
 
+fn detect_state_from_omp_jsonl(jsonl_path: &Path) -> ConversationState {
+    let last_msg_time = latest_timestamp_from_jsonl(jsonl_path);
+    let lines = read_last_lines(jsonl_path, 50);
+
+    for line in lines.iter().rev() {
+        let parsed: serde_json::Value = match serde_json::from_str(line) {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+
+        let msg_type = parsed.get("type").and_then(|v| v.as_str()).unwrap_or("");
+
+        // Tool execution still in flight → agent is processing
+        if msg_type == "custom" {
+            let custom_type = parsed
+                .get("customType")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            if custom_type == "tool_execution_start" {
+                return ConversationState {
+                    state: SessionState::Processing,
+                    pending_action: None,
+                    last_message_time: last_msg_time,
+                };
+            }
+            continue;
+        }
+
+        if msg_type != "message" {
+            continue;
+        }
+
+        let role = parsed
+            .get("message")
+            .and_then(|m| m.get("role"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+
+        match role {
+            // Assistant already responded and is waiting for the user
+            "assistant" => {
+                return ConversationState {
+                    state: SessionState::AwaitingInput,
+                    pending_action: Some(PendingAction {
+                        action_type: "input".to_string(),
+                        description: "Waiting for user input".to_string(),
+                        tool: None,
+                        command: None,
+                    }),
+                    last_message_time: last_msg_time,
+                };
+            }
+            // User sent a message or tool result came back → agent is working
+            "user" | "toolResult" => {
+                return ConversationState {
+                    state: SessionState::Processing,
+                    pending_action: None,
+                    last_message_time: last_msg_time,
+                };
+            }
+            _ => continue,
+        }
+    }
+
+    ConversationState {
+        state: SessionState::Processing,
+        pending_action: None,
+        last_message_time: last_msg_time,
+    }
+}
+
 /// Read the last N lines of a file (reads from end)
 fn read_last_lines(path: &Path, n: usize) -> Vec<String> {
     let file = match fs::File::open(path) {
@@ -364,6 +451,28 @@ fn is_codex_spinner_title(title: &str) -> bool {
         .next()
         .map(|c| ('\u{2800}'..='\u{28ff}').contains(&c))
         .unwrap_or(false)
+}
+
+fn is_omp_processing_capture(capture: &str) -> bool {
+    capture
+        .lines()
+        .rev()
+        .take(80)
+        .any(|line| line.contains("⟦esc⟧"))
+}
+
+fn omp_pane_is_processing(target: &str) -> Option<bool> {
+    let output = cmd("tmux")
+        .args(["capture-pane", "-p", "-t", target, "-S", "-80"])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+
+    Some(is_omp_processing_capture(&String::from_utf8_lossy(
+        &output.stdout,
+    )))
 }
 
 fn reconcile_codex_state_with_title(
@@ -1026,6 +1135,84 @@ mod tests {
     }
 
     #[test]
+    fn omp_capture_with_escape_hint_is_processing() {
+        let capture = "⠙ Building metadata update ⟦esc⟧";
+
+        assert!(is_omp_processing_capture(capture));
+    }
+
+    #[test]
+    fn omp_capture_idle_footer_without_escape_hint_is_not_processing() {
+        let capture = "Ready\n────────────────────────────────\nOMP\n❯ ";
+
+        assert!(!is_omp_processing_capture(capture));
+    }
+
+    #[test]
+    fn omp_assistant_final_message_is_awaiting_input() {
+        let path = write_temp_jsonl(
+            "omp-assistant-final",
+            &[
+                r#"{"timestamp":"2026-07-09T16:00:00Z","type":"message","message":{"role":"user","content":"Start"}}"#,
+                r#"{"timestamp":"2026-07-09T16:00:01Z","type":"message","message":{"role":"assistant","content":"Done"}}"#,
+            ],
+        );
+
+        let state = detect_state_from_omp_jsonl(&path);
+        let _ = fs::remove_file(path);
+
+        assert_eq!(state.state, SessionState::AwaitingInput);
+    }
+
+    #[test]
+    fn omp_user_final_message_is_processing() {
+        let path = write_temp_jsonl(
+            "omp-user-final",
+            &[
+                r#"{"timestamp":"2026-07-09T16:00:00Z","type":"message","message":{"role":"assistant","content":"What next?"}}"#,
+                r#"{"timestamp":"2026-07-09T16:00:01Z","type":"message","message":{"role":"user","content":"Continue"}}"#,
+            ],
+        );
+
+        let state = detect_state_from_omp_jsonl(&path);
+        let _ = fs::remove_file(path);
+
+        assert_eq!(state.state, SessionState::Processing);
+    }
+
+    #[test]
+    fn omp_tool_result_final_message_is_processing() {
+        let path = write_temp_jsonl(
+            "omp-tool-result-final",
+            &[
+                r#"{"timestamp":"2026-07-09T16:00:00Z","type":"message","message":{"role":"assistant","content":"Running tool"}}"#,
+                r#"{"timestamp":"2026-07-09T16:00:01Z","type":"message","message":{"role":"toolResult","content":"ok"}}"#,
+            ],
+        );
+
+        let state = detect_state_from_omp_jsonl(&path);
+        let _ = fs::remove_file(path);
+
+        assert_eq!(state.state, SessionState::Processing);
+    }
+
+    #[test]
+    fn omp_tool_execution_start_final_entry_is_processing() {
+        let path = write_temp_jsonl(
+            "omp-tool-execution-start-final",
+            &[
+                r#"{"timestamp":"2026-07-09T16:00:00Z","type":"message","message":{"role":"assistant","content":"Running tool"}}"#,
+                r#"{"timestamp":"2026-07-09T16:00:01Z","type":"custom","customType":"tool_execution_start"}"#,
+            ],
+        );
+
+        let state = detect_state_from_omp_jsonl(&path);
+        let _ = fs::remove_file(path);
+
+        assert_eq!(state.state, SessionState::Processing);
+    }
+
+    #[test]
     fn codex_task_complete_wins_over_trailing_bookkeeping() {
         let path = write_temp_jsonl(
             "codex-complete",
@@ -1210,11 +1397,16 @@ fn latest_timestamp_from_jsonl(jsonl_path: &Path) -> Option<DateTime<Utc>> {
 
 /// Derive a display name from pane info
 fn derive_project_name(pane: &AgentPane) -> String {
-    // Best source: pane_title (set by Claude, e.g. "✳ R2 Upload Failure")
+    // Best source: pane_title (set by agent, e.g. "✳ R2 Upload Failure" or "π: task")
     let title = pane.pane_title.trim();
     if !title.is_empty() && title != "MacBookPro.localdomain" && !title.contains("localhost") {
-        // Strip the ✳ prefix if present
-        let clean = title.trim_start_matches('✳').trim_start_matches("✴").trim();
+        // Strip agent-specific prefixes if present
+        let clean = title
+            .trim_start_matches('✳')
+            .trim_start_matches("✴")
+            .trim_start_matches('π')
+            .trim_start_matches(':')
+            .trim();
         if !clean.is_empty() {
             return clean.to_string();
         }
@@ -1289,14 +1481,24 @@ pub fn scan_tmux(state: &Arc<AppState>, app_handle: &AppHandle) {
                 None => awaiting_input_state(None),
             }
         } else if pane.agent_kind == "omp" {
-            // OMP does not expose the same JSONL state as Claude/Codex, so rely on
-            // hooks for precise state changes and use the pane as a fallback.
-            let last_msg_time = find_active_omp_jsonl(&pane.cwd)
-                .and_then(|jsonl| latest_timestamp_from_jsonl(&jsonl));
-            ConversationState {
-                state: SessionState::Processing,
-                pending_action: None,
-                last_message_time: last_msg_time,
+            let jsonl_state = find_active_omp_jsonl(&pane.cwd)
+                .map(|jsonl| detect_state_from_omp_jsonl(&jsonl));
+            let last_message_time = jsonl_state
+                .as_ref()
+                .and_then(|detected| detected.last_message_time);
+
+            match omp_pane_is_processing(&pane.target) {
+                Some(true) => ConversationState {
+                    state: SessionState::Processing,
+                    pending_action: None,
+                    last_message_time,
+                },
+                Some(false) => awaiting_input_state(last_message_time),
+                None => jsonl_state.unwrap_or(ConversationState {
+                    state: SessionState::Processing,
+                    pending_action: None,
+                    last_message_time: None,
+                }),
             }
         } else if title_starts_with_idle_marker {
             // ✳ means Claude Code is idle — check JSONL for AwaitingInput vs AwaitingPermission

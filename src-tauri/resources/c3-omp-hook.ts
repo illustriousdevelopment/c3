@@ -1,4 +1,4 @@
-import type { HookAPI } from "@oh-my-pi/pi-coding-agent/extensibility/hooks";
+import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
 
 /**
  * C3 notification hook for OMP (Oh My Pi).
@@ -19,12 +19,12 @@ import type { HookAPI } from "@oh-my-pi/pi-coding-agent/extensibility/hooks";
 
 const C3_HOOK = "$HOME/.local/bin/c3-hook.sh";
 
-export default function c3NotifyHook(pi: HookAPI): void {
+export default function c3NotifyHook(pi: ExtensionAPI): void {
   async function notify(hookType: string, cwd: string): Promise<void> {
     try {
       await pi.exec(
         "bash",
-        ["-c", `C3_AGENT_KIND=omp ${C3_HOOK} ${hookType}`],
+        ["-c", `C3_AGENT_KIND=omp C3_OMP_HOOK_VERSION=2 ${C3_HOOK} ${hookType}`],
         { cwd },
       );
     } catch {
@@ -32,16 +32,12 @@ export default function c3NotifyHook(pi: HookAPI): void {
     }
   }
 
-  pi.on("session_start", async (_event, ctx) => {
-    await notify("SessionStart", ctx.cwd);
-  });
 
-  pi.on("turn_end", async (_event, ctx) => {
-    // OMP has finished a turn and is waiting for the user to respond.
+  pi.on("session_stop", async (_event, ctx) => {
+    // session_stop is emitted once when the interactive main session settles;
+    // OMP intentionally excludes task/subagent sessions from this event.
+    if (!ctx.hasUI) return;
     await notify("Notification", ctx.cwd);
   });
 
-  pi.on("session_shutdown", async (_event, ctx) => {
-    await notify("Stop", ctx.cwd);
-  });
 }

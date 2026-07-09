@@ -47,7 +47,7 @@ brew install --cask c3
 
 Download the latest `.dmg` from [Releases](https://github.com/illustriousdevelopment/c3/releases), open it, and drag C3 to Applications.
 
-Current release: [v0.2.11](https://github.com/illustriousdevelopment/c3/releases/tag/v0.2.11)
+Current release: [v0.2.12](https://github.com/illustriousdevelopment/c3/releases/tag/v0.2.12)
 
 ## Setup
 

@@ -1792,31 +1792,44 @@ async fn handle_hook_request(mut stream: TcpStream, state: Arc<AppState>, app_ha
         }
     };
 
-    // Find matching session by cwd (exact match first, then prefix match)
+    // Prefer the exact tmux pane, then the hook session id, then path matches
+    // constrained to the same agent kind. Multiple agents commonly share a cwd.
+    let hook_tmux_target = tmux_target_from_hook(&notification);
     let (session_id, project_name) = {
         let sessions = state.sessions.read();
-        let found = notification
-            .session_id
+        let kind_matches = |session: &&C3Session| {
+            agent_kind == "unknown"
+                || session.agent_kind.as_deref() == Some(agent_kind.as_str())
+        };
+
+        let found = hook_tmux_target
             .as_ref()
-            .and_then(|hook_session_id| sessions.get(hook_session_id));
-        // Exact match
+            .and_then(|target| sessions.get(&format!("tmux:{}", target)));
+        let found = found.or_else(|| {
+            notification
+                .session_id
+                .as_ref()
+                .and_then(|hook_session_id| sessions.get(hook_session_id))
+        });
         let found = found.or_else(|| {
             sessions
                 .values()
-                .find(|s| s.project_path.as_deref() == Some(&notification.cwd))
+                .filter(&kind_matches)
+                .find(|session| session.project_path.as_deref() == Some(&notification.cwd))
         });
-        // Prefix match: hook cwd starts with session path or vice versa
         let found = found.or_else(|| {
-            sessions.values().find(|s| {
-                if let Some(ref path) = s.project_path {
-                    notification.cwd.starts_with(path) || path.starts_with(&notification.cwd)
-                } else {
-                    false
-                }
+            sessions.values().filter(&kind_matches).find(|session| {
+                session
+                    .project_path
+                    .as_ref()
+                    .map(|path| {
+                        notification.cwd.starts_with(path) || path.starts_with(&notification.cwd)
+                    })
+                    .unwrap_or(false)
             })
         });
         found
-            .map(|s| (s.id.clone(), s.project_name.clone()))
+            .map(|session| (session.id.clone(), session.project_name.clone()))
             .unzip()
     };
     let mut session_id: Option<String> = session_id;
