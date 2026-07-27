@@ -271,144 +271,6 @@ fn find_active_codex_jsonl(cwd: &str) -> Option<PathBuf> {
         .find(|path| codex_jsonl_matches_cwd(path, cwd))
 }
 
-fn omp_sessions_dir() -> PathBuf {
-    dirs_next()
-        .unwrap_or_else(|| PathBuf::from("/tmp"))
-        .join(".omp")
-        .join("agent")
-        .join("sessions")
-}
-
-fn collect_omp_jsonl_matches(dir: &Path, cwd: &str, out: &mut Vec<PathBuf>) {
-    let entries = match fs::read_dir(dir) {
-        Ok(entries) => entries,
-        Err(_) => return,
-    };
-
-    for entry in entries.filter_map(|e| e.ok()) {
-        let path = entry.path();
-        if path.is_dir() {
-            collect_omp_jsonl_matches(&path, cwd, out);
-        } else if path.extension().map(|ext| ext == "jsonl").unwrap_or(false) {
-            if omp_jsonl_matches_cwd(&path, cwd) {
-                out.push(path);
-            }
-        }
-    }
-}
-
-fn omp_jsonl_matches_cwd(path: &Path, cwd: &str) -> bool {
-    let file = match fs::File::open(path) {
-        Ok(file) => file,
-        Err(_) => return false,
-    };
-
-    for line in BufReader::new(file).lines().filter_map(|l| l.ok()).take(5) {
-        let parsed: serde_json::Value = match serde_json::from_str(&line) {
-            Ok(parsed) => parsed,
-            Err(_) => continue,
-        };
-
-        if parsed.get("type").and_then(|v| v.as_str()) != Some("session") {
-            continue;
-        }
-
-        if parsed.get("cwd").and_then(|v| v.as_str()) == Some(cwd) {
-            return true;
-        }
-    }
-
-    false
-}
-
-fn find_active_omp_jsonl(cwd: &str) -> Option<PathBuf> {
-    let sessions_dir = omp_sessions_dir();
-    if !sessions_dir.exists() {
-        return None;
-    }
-
-    let mut matches = Vec::new();
-    collect_omp_jsonl_matches(&sessions_dir, cwd, &mut matches);
-    matches.sort_by_key(|path| {
-        fs::metadata(path)
-            .and_then(|m| m.modified())
-            .unwrap_or(SystemTime::UNIX_EPOCH)
-    });
-    matches.reverse();
-    matches.into_iter().next()
-}
-
-fn detect_state_from_omp_jsonl(jsonl_path: &Path) -> ConversationState {
-    let last_msg_time = latest_timestamp_from_jsonl(jsonl_path);
-    let lines = read_last_lines(jsonl_path, 50);
-
-    for line in lines.iter().rev() {
-        let parsed: serde_json::Value = match serde_json::from_str(line) {
-            Ok(v) => v,
-            Err(_) => continue,
-        };
-
-        let msg_type = parsed.get("type").and_then(|v| v.as_str()).unwrap_or("");
-
-        // Tool execution still in flight → agent is processing
-        if msg_type == "custom" {
-            let custom_type = parsed
-                .get("customType")
-                .and_then(|v| v.as_str())
-                .unwrap_or("");
-            if custom_type == "tool_execution_start" {
-                return ConversationState {
-                    state: SessionState::Processing,
-                    pending_action: None,
-                    last_message_time: last_msg_time,
-                };
-            }
-            continue;
-        }
-
-        if msg_type != "message" {
-            continue;
-        }
-
-        let role = parsed
-            .get("message")
-            .and_then(|m| m.get("role"))
-            .and_then(|v| v.as_str())
-            .unwrap_or("");
-
-        match role {
-            // Assistant already responded and is waiting for the user
-            "assistant" => {
-                return ConversationState {
-                    state: SessionState::AwaitingInput,
-                    pending_action: Some(PendingAction {
-                        action_type: "input".to_string(),
-                        description: "Waiting for user input".to_string(),
-                        tool: None,
-                        command: None,
-                    }),
-                    last_message_time: last_msg_time,
-                };
-            }
-            // User sent a message or tool result came back → agent is working
-            "user" | "toolResult" => {
-                return ConversationState {
-                    state: SessionState::Processing,
-                    pending_action: None,
-                    last_message_time: last_msg_time,
-                };
-            }
-            _ => continue,
-        }
-    }
-
-    ConversationState {
-        state: SessionState::Processing,
-        pending_action: None,
-        last_message_time: last_msg_time,
-    }
-}
-
 /// Read the last N lines of a file (reads from end)
 fn read_last_lines(path: &Path, n: usize) -> Vec<String> {
     let file = match fs::File::open(path) {
@@ -1149,70 +1011,6 @@ mod tests {
     }
 
     #[test]
-    fn omp_assistant_final_message_is_awaiting_input() {
-        let path = write_temp_jsonl(
-            "omp-assistant-final",
-            &[
-                r#"{"timestamp":"2026-07-09T16:00:00Z","type":"message","message":{"role":"user","content":"Start"}}"#,
-                r#"{"timestamp":"2026-07-09T16:00:01Z","type":"message","message":{"role":"assistant","content":"Done"}}"#,
-            ],
-        );
-
-        let state = detect_state_from_omp_jsonl(&path);
-        let _ = fs::remove_file(path);
-
-        assert_eq!(state.state, SessionState::AwaitingInput);
-    }
-
-    #[test]
-    fn omp_user_final_message_is_processing() {
-        let path = write_temp_jsonl(
-            "omp-user-final",
-            &[
-                r#"{"timestamp":"2026-07-09T16:00:00Z","type":"message","message":{"role":"assistant","content":"What next?"}}"#,
-                r#"{"timestamp":"2026-07-09T16:00:01Z","type":"message","message":{"role":"user","content":"Continue"}}"#,
-            ],
-        );
-
-        let state = detect_state_from_omp_jsonl(&path);
-        let _ = fs::remove_file(path);
-
-        assert_eq!(state.state, SessionState::Processing);
-    }
-
-    #[test]
-    fn omp_tool_result_final_message_is_processing() {
-        let path = write_temp_jsonl(
-            "omp-tool-result-final",
-            &[
-                r#"{"timestamp":"2026-07-09T16:00:00Z","type":"message","message":{"role":"assistant","content":"Running tool"}}"#,
-                r#"{"timestamp":"2026-07-09T16:00:01Z","type":"message","message":{"role":"toolResult","content":"ok"}}"#,
-            ],
-        );
-
-        let state = detect_state_from_omp_jsonl(&path);
-        let _ = fs::remove_file(path);
-
-        assert_eq!(state.state, SessionState::Processing);
-    }
-
-    #[test]
-    fn omp_tool_execution_start_final_entry_is_processing() {
-        let path = write_temp_jsonl(
-            "omp-tool-execution-start-final",
-            &[
-                r#"{"timestamp":"2026-07-09T16:00:00Z","type":"message","message":{"role":"assistant","content":"Running tool"}}"#,
-                r#"{"timestamp":"2026-07-09T16:00:01Z","type":"custom","customType":"tool_execution_start"}"#,
-            ],
-        );
-
-        let state = detect_state_from_omp_jsonl(&path);
-        let _ = fs::remove_file(path);
-
-        assert_eq!(state.state, SessionState::Processing);
-    }
-
-    #[test]
     fn codex_task_complete_wins_over_trailing_bookkeeping() {
         let path = write_temp_jsonl(
             "codex-complete",
@@ -1453,8 +1251,7 @@ pub fn scan_tmux(state: &Arc<AppState>, app_handle: &AppHandle) {
                 find_active_codex_jsonl(&pane.cwd)
                     .and_then(|jsonl| latest_timestamp_from_jsonl(&jsonl))
             } else if pane.agent_kind == "omp" {
-                find_active_omp_jsonl(&pane.cwd)
-                    .and_then(|jsonl| latest_timestamp_from_jsonl(&jsonl))
+                None
             } else {
                 let project_dir = cwd_to_project_dir(&pane.cwd);
                 find_active_jsonl(&project_dir)
@@ -1481,24 +1278,18 @@ pub fn scan_tmux(state: &Arc<AppState>, app_handle: &AppHandle) {
                 None => awaiting_input_state(None),
             }
         } else if pane.agent_kind == "omp" {
-            let jsonl_state = find_active_omp_jsonl(&pane.cwd)
-                .map(|jsonl| detect_state_from_omp_jsonl(&jsonl));
-            let last_message_time = jsonl_state
-                .as_ref()
-                .and_then(|detected| detected.last_message_time);
-
             match omp_pane_is_processing(&pane.target) {
                 Some(true) => ConversationState {
                     state: SessionState::Processing,
                     pending_action: None,
-                    last_message_time,
+                    last_message_time: None,
                 },
-                Some(false) => awaiting_input_state(last_message_time),
-                None => jsonl_state.unwrap_or(ConversationState {
+                Some(false) => awaiting_input_state(None),
+                None => ConversationState {
                     state: SessionState::Processing,
                     pending_action: None,
                     last_message_time: None,
-                }),
+                },
             }
         } else if title_starts_with_idle_marker {
             // ✳ means Claude Code is idle — check JSONL for AwaitingInput vs AwaitingPermission
@@ -1570,7 +1361,7 @@ pub fn scan_tmux(state: &Arc<AppState>, app_handle: &AppHandle) {
             let jsonl = if pane.agent_kind == "codex" {
                 find_active_codex_jsonl(&pane.cwd)
             } else if pane.agent_kind == "omp" {
-                find_active_omp_jsonl(&pane.cwd)
+                None
             } else {
                 let project_dir = cwd_to_project_dir(&pane.cwd);
                 find_active_jsonl(&project_dir)
