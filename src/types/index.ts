@@ -66,8 +66,22 @@ export interface AppSettings {
   permission_sound: SoundConfig;
   input_sound: SoundConfig;
   complete_sound: SoundConfig;
+  remote_access_enabled: boolean;
+  remote_bind_address: string;
+  remote_port: number;
+  remote_access_token: string;
 }
 
+export interface RemoteAccessInfo {
+  enabled: boolean;
+  tailscaleAvailable: boolean;
+  tailscaleIp: string | null;
+  bindAddress: string | null;
+  port: number;
+  url: string | null;
+  pairingUrl: string | null;
+  error: string | null;
+}
 export interface HookStatus {
   hooks_installed: boolean;
   claude_hooks_installed: boolean;

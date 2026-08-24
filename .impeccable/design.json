@@ -1,0 +1,171 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-08-24",
+  "title": "Design System: C3",
+  "extensions": {
+    "shadows": [
+      {
+        "name": "remote-card",
+        "value": "0 2px 8px rgba(0, 0, 0, .22)",
+        "purpose": "Separates compact remote session cards from the near-black board."
+      },
+      {
+        "name": "desktop-urgent-lane",
+        "value": "0 0 0 1px rgba(220, 38, 38, 0.2), 0 0 20px rgba(220, 38, 38, 0.1)",
+        "purpose": "Adds a red edge and restrained halo only to an urgent desktop lane."
+      },
+      {
+        "name": "desktop-modal",
+        "value": "0 20px 60px rgba(0, 0, 0, 0.5)",
+        "purpose": "Lifts desktop settings, search, and keyboard modal surfaces over their scrim."
+      }
+    ],
+    "motion": [
+      {
+        "name": "desktop-state",
+        "value": "all 0.15s ease",
+        "purpose": "Common desktop hover and compact-control state transition."
+      },
+      {
+        "name": "remote-card-state",
+        "value": "background 120ms ease-out, border-color 120ms ease-out",
+        "purpose": "Remote card press and border feedback."
+      },
+      {
+        "name": "desktop-modal-enter",
+        "value": "0.2s ease",
+        "purpose": "Desktop modal slide-in timing."
+      }
+    ],
+    "breakpoints": [
+      {
+        "name": "remote-single-column",
+        "value": "360px"
+      },
+      {
+        "name": "remote-roomy",
+        "value": "700px"
+      }
+    ]
+  },
+  "components": [
+    {
+      "name": "Desktop Filter Chip",
+      "kind": "chip",
+      "refersTo": "desktop-filter-chip",
+      "description": "Compact desktop board filter with hover and active treatments.",
+      "html": "<button class=\"ds-filter-chip ds-active\" type=\"button\"><span class=\"ds-filter-chip-dot\" aria-hidden=\"true\"></span>Needs input<span class=\"ds-filter-chip-count\">2</span></button>",
+      "css": ".ds-filter-chip { display: inline-flex; align-items: center; gap: 6px; padding: 6px 12px; background: #12121a; border: 1px solid #27272a; border-radius: 20px; color: #a1a1aa; font: 12px 'Geist', -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI', Roboto, sans-serif; cursor: pointer; transition: all 0.15s ease; } .ds-filter-chip:hover { background: #1a1a25; border-color: #71717a; } .ds-filter-chip.ds-active { background: #1a1a25; border-color: #3B82F6; color: #e4e4e7; } .ds-filter-chip-dot { width: 8px; height: 8px; border-radius: 50%; background: #D97706; } .ds-filter-chip-count { padding: 1px 6px; border-radius: 10px; background: rgba(255, 255, 255, 0.1); font-size: 10px; font-weight: 600; }"
+    },
+    {
+      "name": "Desktop Session Card",
+      "kind": "card",
+      "refersTo": "desktop-session-card",
+      "description": "Dense desktop session row whose selection is an inset blue edge, not extra elevation.",
+      "html": "<div class=\"ds-desktop-session-card ds-selected\"><span class=\"ds-desktop-session-indicator\" aria-hidden=\"true\"></span><span class=\"ds-desktop-session-content\"><strong>Agent session</strong><small>WORKING · just now</small></span></div>",
+      "css": ".ds-desktop-session-card { display: flex; align-items: stretch; gap: 10px; padding: 8px 12px; background: #16161f; border-radius: 6px; color: #e4e4e7; font-family: 'Geist', -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI', Roboto, sans-serif; cursor: pointer; transition: all 0.15s ease; } .ds-desktop-session-card:hover { background: #1a1a25; } .ds-desktop-session-card.ds-selected { background: #1a1a25; box-shadow: inset 3px 0 0 #3B82F6; } .ds-desktop-session-indicator { width: 3px; border-radius: 2px; background: #2563EB; } .ds-desktop-session-content { display: grid; gap: 6px; min-width: 0; } .ds-desktop-session-content strong { font-size: 13px; font-weight: 600; } .ds-desktop-session-content small { color: #71717a; font-size: 10px; }"
+    },
+    {
+      "name": "Desktop Settings Select",
+      "kind": "input",
+      "refersTo": "desktop-settings-select",
+      "description": "Full-width graphite select used throughout desktop settings.",
+      "html": "<select class=\"ds-settings-select\" aria-label=\"Default agent\"><option>Codex</option><option>Claude Code</option></select>",
+      "css": ".ds-settings-select { width: 100%; padding: 10px 12px; background: #1a1a25; border: 1px solid #27272a; border-radius: 6px; color: #e4e4e7; font: 13px 'Geist', -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI', Roboto, sans-serif; cursor: pointer; appearance: none; background-image: url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%2371717a' d='M6 8L2 4h8z'/%3E%3C/svg%3E\"); background-repeat: no-repeat; background-position: right 12px center; } .ds-settings-select:focus { outline: none; border-color: #3B82F6; }"
+    },
+    {
+      "name": "Remote Session Card",
+      "kind": "card",
+      "refersTo": "remote-session-card",
+      "description": "Signature remote attention tile with state text, attention copy, and a redundant state light.",
+      "html": "<button class=\"ds-remote-session-card\" type=\"button\"><span class=\"ds-remote-state-light\" aria-hidden=\"true\"></span><strong class=\"ds-remote-session-name\">Agent session</strong><span class=\"ds-remote-session-task\">Current project task</span><span class=\"ds-remote-state-label\">NEEDS INPUT</span><span class=\"ds-remote-attention\">Review the latest pane output</span><span class=\"ds-remote-agent-kind\">agent</span></button>",
+      "css": ".ds-remote-session-card { position: relative; display: grid; min-width: 0; min-height: 174px; padding: 15px 15px 13px; text-align: left; background: #1b1f27; border: 1px solid #6e7684; border-radius: 3px; box-shadow: 0 2px 8px rgba(0, 0, 0, .22); color: #f4f6f8; font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Helvetica Neue', sans-serif; cursor: pointer; transition: background 120ms ease-out, border-color 120ms ease-out; } .ds-remote-session-card:hover { border-color: #929aa7; } .ds-remote-session-card:active { background: #242a34; } .ds-remote-session-card:focus-visible { outline: 2px solid #71b7ef; outline-offset: 3px; } .ds-remote-state-light { position: absolute; width: 9px; height: 9px; border-radius: 50%; top: 10px; right: 10px; background: #ffc107; } .ds-remote-session-name { margin-right: 24px; font-size: 18px; line-height: 1.18; font-weight: 780; letter-spacing: -0.022em; } .ds-remote-session-task { margin-top: 4px; color: #a8b0bc; font-size: 14px; line-height: 1.35; } .ds-remote-state-label { align-self: end; margin-top: 14px; color: #9da5b1; font-size: 12px; font-weight: 780; letter-spacing: .065em; } .ds-remote-attention { margin-top: 6px; font-size: 15px; line-height: 1.32; } .ds-remote-agent-kind { margin-top: 13px; color: #8f98a5; font-size: 12px; text-transform: lowercase; }"
+    },
+    {
+      "name": "Remote Response Field",
+      "kind": "input",
+      "refersTo": "remote-response-field",
+      "description": "Detail-only multiline response field sized for touch and visible focus.",
+      "html": "<textarea class=\"ds-remote-response\" rows=\"2\" placeholder=\"Type or dictate a response\" aria-label=\"Response\"></textarea>",
+      "css": ".ds-remote-response { width: 100%; min-height: 48px; max-height: 150px; resize: none; padding: 12px 13px; border: 1px solid #59616e; border-radius: 9px; background: #1b1f27; color: #f4f6f8; font: 14px/1.35 -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Helvetica Neue', sans-serif; } .ds-remote-response::placeholder { color: #858e9b; } .ds-remote-response:focus-visible { outline: 2px solid #71b7ef; outline-offset: 3px; }"
+    },
+    {
+      "name": "Remote Send Button",
+      "kind": "button",
+      "refersTo": "remote-send-button",
+      "description": "Compact affirmative action paired with the detail response field.",
+      "html": "<button class=\"ds-remote-send\" type=\"button\">Send</button>",
+      "css": ".ds-remote-send { min-width: 58px; min-height: 48px; border: 0; border-radius: 9px; background: #71b7ef; color: #07131c; font: 780 14px -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Helvetica Neue', sans-serif; cursor: pointer; } .ds-remote-send:focus-visible { outline: 2px solid #71b7ef; outline-offset: 3px; } .ds-remote-send:disabled { background: #47505c; color: #8c95a1; cursor: default; }"
+    },
+    {
+      "name": "Remote Terminal Pane",
+      "kind": "custom",
+      "refersTo": "remote-terminal",
+      "description": "Selectable, wrapping pane capture used as operational context in session detail.",
+      "html": "<pre class=\"ds-remote-terminal\" tabindex=\"0\">$ agent status\nWaiting for input…</pre>",
+      "css": ".ds-remote-terminal { min-height: 150px; margin: 0; padding: 14px; overflow: auto; border: 1px solid #3d4550; border-radius: 4px; background: #0b0d11; color: #dce2e8; font: 11.5px/1.48 ui-monospace, 'SFMono-Regular', Menlo, Monaco, Consolas, monospace; white-space: pre-wrap; overflow-wrap: anywhere; tab-size: 2; } .ds-remote-terminal:focus-visible { outline: 2px solid #71b7ef; outline-offset: 3px; }"
+    }
+  ],
+  "narrative": {
+    "northStar": "The Attention Board",
+    "overview": "C3 is a restrained, compact operational world built around a near-black and graphite field. It should feel like dependable workstation infrastructure: information-dense without looking busy, quiet until a session changes state, and direct about the action the user needs to take.\n\nThe desktop dashboard and remote clients share that hierarchy without sharing a page template. Desktop can use lanes and denser management controls; remote uses a compact board and one drill-in to terminal context. The remote board's two-column ceiling and detail-only response composer are surface rules, not universal layout rules.",
+    "keyCharacteristics": [
+      "Near-black foundations with shallow graphite layering.",
+      "State color used as a signal, never as ambient decoration.",
+      "Attention text before secondary metadata.",
+      "Compact typography with strong labels and monospaced terminal or path data.",
+      "Native controls and semantic type on iOS, preserving hierarchy rather than copying web pixels."
+    ],
+    "rules": [
+      {
+        "name": "The Signals, Not Decoration Rule",
+        "body": "Cool blue means activity or action, amber means attention, and red means permission/error pressure; keep these colors sparse enough to scan.",
+        "section": "colors"
+      },
+      {
+        "name": "The Surface Owns the State Mapping Rule",
+        "body": "Preserve each implemented surface's exact semantic mapping; desktop completion is green, while remote completion/idle is amber and remote errors are red.",
+        "section": "colors"
+      },
+      {
+        "name": "The Operational Type Rule",
+        "body": "Use monospaced type for terminal output, paths, commands, ports, tokens, and keyboard hints—not for ordinary prose.",
+        "section": "typography"
+      },
+      {
+        "name": "The Native Adaptation Rule",
+        "body": "On iOS, preserve emphasis and reading order with semantic font roles; do not freeze the web font sizes into SwiftUI.",
+        "section": "typography"
+      },
+      {
+        "name": "The Two Columns Are a Ceiling Rule",
+        "body": "Remote boards use two columns at most and fall back to one when width or Dynamic Type makes two columns hostile; this does not constrain desktop lanes.",
+        "section": "layout"
+      },
+      {
+        "name": "The Response Belongs in Detail Rule",
+        "body": "Do not place a composer on session tiles or the board. One drill-in reveals pane context and the response action together.",
+        "section": "layout"
+      },
+      {
+        "name": "The Flat Until It Matters Rule",
+        "body": "Use tonal contrast and borders for ordinary hierarchy; reserve pronounced shadow for transient elevation or urgent attention.",
+        "section": "elevation"
+      }
+    ],
+    "dos": [
+      "**Do** lead every session tile with identity and the attention-relevant state before quiet metadata.",
+      "**Do** keep activity blue, attention amber, and permission/error red sparse and semantic.",
+      "**Do** preserve visible focus, semantic labels, reduced-motion behavior, safe areas, and at least 44px touch targets on remote actions.",
+      "**Do** let Dynamic Type move the native board to one column and remove restrictive line limits.",
+      "**Do** adapt materials natively on iOS with system backgrounds, separators, bars, and semantic type roles."
+    ],
+    "donts": [
+      "**Don't** promote the remote two-column board into a global desktop grid rule; desktop lanes remain an auto-filling workstation composition.",
+      "**Don't** put response controls on the board or inside session tiles; keep them with terminal context in detail.",
+      "**Don't** use state color as decoration or as the sole carrier of meaning.",
+      "**Don't** copy fixed web typography or shadow values into SwiftUI when semantic native equivalents already express the hierarchy.",
+      "**Don't** turn pane capture into a general shell or add feature-heavy terminal chrome."
+    ]
+  }
+}

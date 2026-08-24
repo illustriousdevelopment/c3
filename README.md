@@ -33,6 +33,7 @@ When running lots of projects in parallel, C3 makes it easier to see which agent
 - [Claude Code](https://docs.anthropic.com/en/docs/claude-code), Codex, OMP, or any combination
 - [jq](https://jqlang.github.io/jq/) — for hook script JSON processing
 - [terminal-notifier](https://github.com/julienXX/terminal-notifier) — for desktop notifications with click-to-focus
+- [Tailscale](https://tailscale.com/) — optional, for private remote access from a phone
 
 ## Install
 
@@ -47,7 +48,7 @@ brew install --cask c3
 
 Download the latest `.dmg` from [Releases](https://github.com/illustriousdevelopment/c3/releases), open it, and drag C3 to Applications.
 
-Current release: [v0.2.13](https://github.com/illustriousdevelopment/c3/releases/tag/v0.2.13)
+Current release: [v0.3.0](https://github.com/illustriousdevelopment/c3/releases/tag/v0.3.0)
 
 ## Setup
 
@@ -77,6 +78,20 @@ curl -fsSL https://raw.githubusercontent.com/illustriousdevelopment/c3/main/setu
 ### Manual setup
 
 See [hooks/SETUP.md](hooks/SETUP.md) for step-by-step instructions.
+
+### Remote access from iPhone
+
+Remote access is optional and disabled by default.
+
+1. Connect the Mac running C3 and your iPhone to the same Tailscale network.
+2. In C3, open **Settings → Remote access**.
+3. Enable **Serve C3 on this Mac's Tailscale address** and save.
+4. Copy the pairing link from Settings and open it in Safari on the iPhone.
+5. Optionally use **Share → Add to Home Screen** for an app-like shortcut.
+
+The mobile view lists every detected agent, opens the latest tmux pane output, and sends typed or dictated responses back to that exact pane. C3 binds only to loopback or Tailscale's `100.64.0.0/10` range and requires a generated access token. Do not port-forward the remote port or expose it on a LAN/public interface.
+
+The native SwiftUI client lives in [`ios/`](ios/) and accepts the same pairing link. See [REMOTE_ACCESS.md](REMOTE_ACCESS.md) for the API, security model, and product design.
 
 ## Usage
 
@@ -110,7 +125,7 @@ C3 uses two mechanisms to track agent sessions:
 
 1. **Hooks** (primary) — Claude Code, Codex, and OMP hooks fire shell commands on `PermissionRequest`, `Notification`, `Stop`, and `SessionStart` events. The `c3-hook.sh` script sends these to C3's local HTTP endpoint (`http://127.0.0.1:9398/hook`), which updates session state and fires desktop notifications via terminal-notifier. Hook payloads include agent kind, cwd, terminal tty, and tmux context when available.
 
-2. **Tmux scanner** (fallback) — Periodically scans tmux for panes running Claude Code, Codex, or OMP, parsing conversation files from `~/.claude/projects/`, `~/.codex/sessions/`, and `~/.omp/agent/sessions/` to determine state. Lower frequency, but useful when a hook was missed or a session was already running before C3 started.
+2. **Tmux scanner** (fallback) — Periodically scans tmux for panes running Claude Code, Codex, or OMP. Claude and Codex conversation files provide fallback state; OMP uses its live pane indicator and hooks so C3 never rescans the full OMP session archive.
 
 Claude Code, Codex, and OMP sessions are intentionally treated as the same kind of work item in the UI: an agent running in a tmux pane that may need focus, approval, input, or cleanup.
 

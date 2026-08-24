@@ -1,0 +1,470 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta name="theme-color" content="#111318">
+  <meta name="color-scheme" content="dark">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="C3 Remote">
+  <link rel="manifest" href="/manifest.webmanifest">
+  <link rel="apple-touch-icon" href="/icon.png">
+  <title>C3 Remote</title>
+  <style>
+    :root {
+      font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", sans-serif;
+      color: #f4f6f8;
+      background: #111318;
+      font-synthesis: none;
+      --bg: #111318;
+      --bar: #1a1e26;
+      --panel: #1b1f27;
+      --panel-pressed: #242a34;
+      --line: #6e7684;
+      --text: #f4f6f8;
+      --muted: #a8b0bc;
+      --faint: #737b88;
+      --blue: #71b7ef;
+      --yellow: #ffc107;
+      --red: #ff6b6b;
+      --green: #75d29a;
+      --safe-top: env(safe-area-inset-top, 0px);
+      --safe-bottom: env(safe-area-inset-bottom, 0px);
+    }
+    * { box-sizing: border-box; }
+    html, body { min-height: 100%; margin: 0; background: var(--bg); }
+    body { overscroll-behavior-y: none; }
+    button, textarea, input { font: inherit; }
+    button { color: inherit; }
+    :focus-visible { outline: 2px solid var(--blue); outline-offset: 3px; }
+    [hidden] { display: none !important; }
+
+    .app-shell { min-height: 100dvh; }
+    .topbar {
+      min-height: calc(58px + var(--safe-top));
+      padding: calc(10px + var(--safe-top)) 16px 10px;
+      display: flex;
+      align-items: center;
+      gap: 11px;
+      background: var(--bar);
+      border-bottom: 1px solid #252b35;
+      position: sticky;
+      top: 0;
+      z-index: 10;
+    }
+    .brand-mark { width: 31px; height: 31px; border-radius: 7px; }
+    .brand-name { font-size: 21px; font-weight: 760; letter-spacing: -0.025em; }
+    .connection {
+      margin-left: auto;
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      min-height: 44px;
+      padding: 0 2px 0 12px;
+      color: var(--muted);
+      font-size: 13px;
+      font-weight: 650;
+    }
+    .connection-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--faint); }
+    .connection.online .connection-dot { background: var(--green); }
+    .connection.offline .connection-dot { background: var(--red); }
+
+    main { width: min(920px, 100%); margin: 0 auto; padding: 19px 14px calc(30px + var(--safe-bottom)); }
+    .board-heading { display: flex; align-items: baseline; justify-content: space-between; margin: 0 0 15px; }
+    .board-heading h1 { margin: 0; font-size: 17px; font-weight: 540; letter-spacing: -0.01em; }
+    .updated { color: var(--faint); font-size: 12px; }
+    .session-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+    .session-card {
+      position: relative;
+      min-width: 0;
+      min-height: 174px;
+      padding: 15px 15px 13px;
+      text-align: left;
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 3px;
+      box-shadow: 0 2px 8px rgba(0, 0, 0, .22);
+      cursor: pointer;
+      transition: background 120ms ease-out, border-color 120ms ease-out;
+    }
+    .session-card:hover { border-color: #929aa7; }
+    .session-card:active { background: var(--panel-pressed); }
+    .state-light { position: absolute; width: 9px; height: 9px; border-radius: 50%; top: 10px; right: 10px; background: var(--faint); }
+    .state-light.processing, .state-light.spawning { background: var(--blue); }
+    .state-light.awaiting_input, .state-light.complete { background: var(--yellow); }
+    .state-light.awaiting_permission, .state-light.error { background: var(--red); }
+    .session-name { margin: 0 24px 4px 0; font-size: 18px; line-height: 1.18; font-weight: 780; letter-spacing: -0.022em; overflow-wrap: anywhere; }
+    .session-task { min-height: 39px; margin: 0 0 14px; color: var(--muted); font-size: 14px; line-height: 1.35; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+    .state-label { margin: 0 0 6px; color: #9da5b1; font-size: 12px; font-weight: 780; letter-spacing: .065em; }
+    .attention { margin: 0; color: var(--text); font-size: 15px; line-height: 1.32; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+    .agent-kind { margin-top: 13px; color: #8f98a5; font-size: 12px; text-transform: lowercase; }
+
+    .empty, .error-panel { padding: 54px 24px; text-align: center; color: var(--muted); }
+    .empty strong, .error-panel strong { display: block; margin-bottom: 7px; color: var(--text); font-size: 18px; }
+
+    .detail { height: calc(100dvh - 96px - var(--safe-top) - var(--safe-bottom)); min-height: 0; display: flex; flex-direction: column; }
+    .detail-header { display: flex; align-items: center; gap: 9px; margin-bottom: 12px; }
+    .back-button, .icon-button {
+      min-width: 44px;
+      min-height: 44px;
+      border: 0;
+      border-radius: 8px;
+      background: transparent;
+      display: inline-grid;
+      place-items: center;
+      cursor: pointer;
+    }
+    .back-button:hover, .icon-button:hover { background: var(--panel); }
+    .detail-title { min-width: 0; }
+    .detail-title h1 { margin: 0; font-size: 18px; line-height: 1.2; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .detail-meta { margin-top: 3px; color: var(--muted); font-size: 12px; }
+    .detail-header .icon-button { margin-left: auto; }
+    .terminal {
+      flex: 1 1 auto;
+      min-height: 0;
+      margin: 0;
+      padding: 14px;
+      overflow: auto;
+      border: 1px solid #3d4550;
+      border-radius: 4px;
+      background: #0b0d11;
+      color: #dce2e8;
+      font: 11.5px/1.48 ui-monospace, "SFMono-Regular", Menlo, Monaco, Consolas, monospace;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+      tab-size: 2;
+    }
+    .terminal.loading { color: var(--faint); }
+    .composer {
+      position: sticky;
+      bottom: 0;
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 9px;
+      padding: 12px 0 max(2px, var(--safe-bottom));
+      background: linear-gradient(to bottom, rgba(17,19,24,0), var(--bg) 12px);
+    }
+    .composer textarea {
+      width: 100%;
+      min-height: 48px;
+      max-height: 150px;
+      resize: none;
+      padding: 12px 13px;
+      border: 1px solid #59616e;
+      border-radius: 9px;
+      background: var(--panel);
+      color: var(--text);
+      line-height: 1.35;
+    }
+    .composer textarea::placeholder { color: #858e9b; }
+    .send-button {
+      min-width: 58px;
+      min-height: 48px;
+      align-self: end;
+      border: 0;
+      border-radius: 9px;
+      background: var(--blue);
+      color: #07131c;
+      font-weight: 780;
+      cursor: pointer;
+    }
+    .send-button:disabled { background: #47505c; color: #8c95a1; cursor: default; }
+    .send-status { grid-column: 1 / -1; min-height: 18px; color: var(--muted); font-size: 12px; }
+    .send-status.error { color: #ff9898; }
+
+    .pairing {
+      min-height: 100dvh;
+      padding: calc(44px + var(--safe-top)) 22px calc(30px + var(--safe-bottom));
+      display: grid;
+      align-content: center;
+      max-width: 480px;
+      margin: 0 auto;
+    }
+    .pairing img { width: 54px; height: 54px; border-radius: 12px; margin-bottom: 23px; }
+    .pairing h1 { margin: 0 0 10px; font-size: 29px; letter-spacing: -0.035em; }
+    .pairing p { margin: 0 0 23px; color: var(--muted); line-height: 1.5; }
+    .pairing input { min-height: 50px; padding: 0 13px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); color: var(--text); }
+    .pairing button { min-height: 50px; margin-top: 10px; border: 0; border-radius: 8px; background: var(--blue); color: #07131c; font-weight: 780; }
+    .pairing-error { min-height: 19px; margin-top: 10px; color: #ff9898; font-size: 13px; }
+
+    @media (max-width: 360px) {
+      .session-grid { grid-template-columns: 1fr; }
+      main { padding-inline: 10px; }
+    }
+    @media (min-width: 700px) {
+      main { padding: 25px 24px 40px; }
+      .session-grid { gap: 14px; }
+      .session-card { min-height: 190px; padding: 18px; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after { scroll-behavior: auto !important; transition: none !important; }
+    }
+  </style>
+</head>
+<body>
+  <!--
+  THESIS: C3 Remote is an attention board, not a desktop dashboard compressed onto a phone.
+  OWN-WORLD: near-black field, graphite session tiles, cool-blue activity, amber attention, and one-pixel operational rules.
+  STORY: scan every agent, open the one that needs attention, read its pane, and return one response.
+  FIRST VIEWPORT: compact C3 bar, agent count, then at most two columns of sessions; the response action lives only inside detail.
+  FORM: restrained mobile operations board pinned by the supplied k-stack reference; seed key user-reference.
+  FINISH: unreviewed and undocumented is unfinished; this build ends with the finish review, the verdict, and DESIGN.md
+  -->
+  <section id="pairing" class="pairing" hidden>
+    <img src="/icon.png" alt="">
+    <h1>Connect to C3</h1>
+    <p>Paste the pairing link from C3 Settings on your Mac. Keep Tailscale connected on both devices.</p>
+    <input id="pairing-input" type="url" inputmode="url" autocomplete="url" autocapitalize="off" spellcheck="false" placeholder="http://100.x.x.x:9399/#token=…" aria-label="C3 pairing link">
+    <button id="pairing-button" type="button">Connect</button>
+    <div id="pairing-error" class="pairing-error" role="alert"></div>
+  </section>
+
+  <div id="app" class="app-shell" hidden>
+    <header class="topbar">
+      <img class="brand-mark" src="/icon.png" alt="">
+      <div class="brand-name">C3 Remote</div>
+      <div id="connection" class="connection" aria-live="polite">
+        <span class="connection-dot"></span><span id="connection-label">Connecting</span>
+      </div>
+    </header>
+
+    <main>
+      <section id="board">
+        <div class="board-heading">
+          <h1 id="agent-count">Agents</h1>
+          <span id="updated" class="updated"></span>
+        </div>
+        <div id="session-grid" class="session-grid"></div>
+        <div id="board-empty" class="empty" hidden><strong>No agent panes</strong>C3 will add sessions when an agent starts in tmux.</div>
+      </section>
+
+      <section id="detail" class="detail" hidden>
+        <div class="detail-header">
+          <button id="back-button" class="back-button" type="button" aria-label="Back to agents">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m15 18-6-6 6-6"/></svg>
+          </button>
+          <div class="detail-title">
+            <h1 id="detail-name">Session</h1>
+            <div id="detail-meta" class="detail-meta"></div>
+          </div>
+          <button id="refresh-button" class="icon-button" type="button" aria-label="Refresh pane">
+            <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 11a8.1 8.1 0 0 0-15.5-2M4 4v5h5"/><path d="M4 13a8.1 8.1 0 0 0 15.5 2M20 20v-5h-5"/></svg>
+          </button>
+        </div>
+        <pre id="terminal" class="terminal loading" tabindex="0">Loading pane…</pre>
+        <form id="composer" class="composer">
+          <textarea id="response" rows="1" maxlength="65536" placeholder="Type or dictate a response" aria-label="Response"></textarea>
+          <button id="send-button" class="send-button" type="submit" disabled>Send</button>
+          <div id="send-status" class="send-status" role="status"></div>
+        </form>
+      </section>
+    </main>
+  </div>
+
+  <script>
+    (() => {
+      const $ = (id) => document.getElementById(id);
+      const state = { token: '', sessions: [], boardFingerprint: '', selectedId: null, boardTimer: null, paneTimer: null };
+      const attentionOrder = { awaiting_permission: 0, awaiting_input: 1, processing: 2, spawning: 2, error: 3, complete: 4 };
+      const stateLabel = (value) => ({
+        awaiting_permission: 'PERMISSION', awaiting_input: 'NEEDS INPUT', processing: 'WORKING',
+        spawning: 'STARTING', complete: 'IDLE', error: 'ERROR'
+      })[value] || value.toUpperCase();
+      const escapeHtml = (value) => String(value ?? '').replace(/[&<>'"]/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' })[char]);
+
+      function extractToken(value) {
+        try {
+          const url = new URL(value, window.location.href);
+          const hash = new URLSearchParams(url.hash.replace(/^#/, ''));
+          return hash.get('token') || '';
+        } catch { return ''; }
+      }
+
+      function bootstrapToken() {
+        const hash = new URLSearchParams(window.location.hash.replace(/^#/, ''));
+        const incoming = hash.get('token');
+        if (incoming) {
+          localStorage.setItem('c3.remote.token', incoming);
+          history.replaceState({}, '', window.location.pathname);
+        }
+        state.token = incoming || localStorage.getItem('c3.remote.token') || '';
+        $('pairing').hidden = Boolean(state.token);
+        $('app').hidden = !state.token;
+      }
+
+      async function api(path, options = {}) {
+        const headers = new Headers(options.headers || {});
+        headers.set('Authorization', `Bearer ${state.token}`);
+        if (options.body) headers.set('Content-Type', 'application/json');
+        const response = await fetch(path, { ...options, headers, cache: 'no-store' });
+        if (response.status === 401) {
+          localStorage.removeItem('c3.remote.token');
+          state.token = '';
+          $('app').hidden = true;
+          $('pairing').hidden = false;
+          throw new Error('The access token was rejected. Paste a fresh pairing link.');
+        }
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(payload.error || `C3 returned ${response.status}`);
+        return payload;
+      }
+
+      function setConnection(kind, label) {
+        $('connection').className = `connection ${kind}`;
+        $('connection-label').textContent = label;
+      }
+
+      function displayName(session) {
+        return session.projectName.replace(/^[⠀-⣿>!]\s*/, '');
+      }
+
+      function sessionSummary(session) {
+        if (!session.projectPath) return `${session.agentKind || 'agent'} session`;
+        const parts = session.projectPath.split('/').filter(Boolean);
+        return parts.at(-1) || session.projectPath;
+      }
+
+      function renderBoard() {
+        const focusedSessionId = document.activeElement?.dataset?.sessionId || null;
+        const sessions = [...state.sessions].sort((a, b) => {
+          const priority = (attentionOrder[a.state] ?? 9) - (attentionOrder[b.state] ?? 9);
+          return priority || new Date(b.lastActivity) - new Date(a.lastActivity);
+        });
+        $('agent-count').textContent = `${sessions.length} ${sessions.length === 1 ? 'agent' : 'agents'}`;
+        $('board-empty').hidden = sessions.length > 0;
+        $('session-grid').innerHTML = sessions.map((session) => `
+          <button class="session-card" type="button" data-session-id="${escapeHtml(session.id)}">
+            <span class="state-light ${escapeHtml(session.state)}" aria-hidden="true"></span>
+            <h2 class="session-name">${escapeHtml(displayName(session))}</h2>
+            <p class="session-task">${escapeHtml(sessionSummary(session))}</p>
+            <div class="state-label">${escapeHtml(stateLabel(session.state))}</div>
+            <p class="attention">${escapeHtml(session.pendingAction?.description || (session.state === 'processing' ? 'Agent is working' : 'Review the latest pane output'))}</p>
+            <div class="agent-kind">${escapeHtml(session.agentKind || 'agent')}</div>
+          </button>`).join('');
+        document.querySelectorAll('[data-session-id]').forEach((card) => card.addEventListener('click', () => openDetail(card.dataset.sessionId)));
+        if (focusedSessionId) {
+          document.querySelector(`[data-session-id="${CSS.escape(focusedSessionId)}"]`)?.focus({ preventScroll: true });
+        }
+      }
+
+      async function refreshBoard() {
+        try {
+          const sessions = await api('/api/sessions');
+          const fingerprint = JSON.stringify(sessions.map((session) => [
+            session.id,
+            session.projectName,
+            session.projectPath,
+            session.agentKind,
+            session.state,
+            session.pendingAction?.description,
+          ]));
+          state.sessions = sessions;
+          if (fingerprint !== state.boardFingerprint) {
+            state.boardFingerprint = fingerprint;
+            renderBoard();
+          }
+          setConnection('online', 'Connected');
+          $('updated').textContent = 'now';
+        } catch (error) {
+          setConnection('offline', 'Offline');
+          $('updated').textContent = '';
+          if (!state.sessions.length && state.token) {
+            $('session-grid').innerHTML = `<div class="error-panel"><strong>Could not reach C3</strong>${escapeHtml(error.message)}</div>`;
+          }
+        }
+      }
+
+      async function refreshPane() {
+        const requestedSessionId = state.selectedId;
+        if (!requestedSessionId) return;
+        const terminal = $('terminal');
+        try {
+          const capture = await api(`/api/capture?sessionId=${encodeURIComponent(requestedSessionId)}`);
+          if (state.selectedId !== requestedSessionId) return;
+          const nearBottom = terminal.scrollHeight - terminal.scrollTop - terminal.clientHeight < 80;
+          terminal.textContent = capture.output || 'Pane is empty.';
+          terminal.classList.remove('loading');
+          if (nearBottom) terminal.scrollTop = terminal.scrollHeight;
+          setConnection('online', 'Connected');
+        } catch (error) {
+          if (state.selectedId !== requestedSessionId) return;
+          terminal.textContent = `Could not load pane.\n\n${error.message}`;
+          terminal.classList.remove('loading');
+          setConnection('offline', 'Offline');
+        }
+      }
+
+      function openDetail(id) {
+        const session = state.sessions.find((item) => item.id === id);
+        if (!session) return;
+        state.selectedId = id;
+        $('board').hidden = true;
+        $('detail').hidden = false;
+        $('detail-name').textContent = displayName(session);
+        $('detail-meta').textContent = `${session.agentKind || 'agent'} · ${stateLabel(session.state)}`;
+        $('terminal').textContent = 'Loading pane…';
+        $('terminal').classList.add('loading');
+        $('response').value = '';
+        $('send-button').disabled = true;
+        $('send-status').textContent = '';
+        window.scrollTo({ top: 0, behavior: 'instant' });
+        history.pushState({ sessionId: id }, '', `#session=${encodeURIComponent(id)}`);
+        clearInterval(state.paneTimer);
+        refreshPane();
+        state.paneTimer = setInterval(refreshPane, 1500);
+      }
+
+      function closeDetail(updateHistory = true) {
+        state.selectedId = null;
+        clearInterval(state.paneTimer);
+        $('detail').hidden = true;
+        $('board').hidden = false;
+        if (updateHistory) history.pushState({}, '', window.location.pathname);
+      }
+
+      $('pairing-button').addEventListener('click', async () => {
+        const token = extractToken($('pairing-input').value);
+        if (!token) { $('pairing-error').textContent = 'That link does not contain a C3 access token.'; return; }
+        state.token = token;
+        localStorage.setItem('c3.remote.token', token);
+        $('pairing').hidden = true;
+        $('app').hidden = false;
+        $('pairing-error').textContent = '';
+        await refreshBoard();
+        clearInterval(state.boardTimer);
+        state.boardTimer = setInterval(refreshBoard, 3000);
+      });
+      $('back-button').addEventListener('click', () => closeDetail());
+      $('refresh-button').addEventListener('click', refreshPane);
+      $('response').addEventListener('input', (event) => { $('send-button').disabled = !event.target.value.trim(); });
+      $('composer').addEventListener('submit', async (event) => {
+        event.preventDefault();
+        const text = $('response').value;
+        if (!text.trim() || !state.selectedId) return;
+        $('send-button').disabled = true;
+        $('send-status').className = 'send-status';
+        $('send-status').textContent = 'Sending…';
+        try {
+          await api('/api/input', { method: 'POST', body: JSON.stringify({ sessionId: state.selectedId, text, submit: true }) });
+          $('response').value = '';
+          $('send-status').textContent = 'Sent';
+          setTimeout(() => { if ($('send-status').textContent === 'Sent') $('send-status').textContent = ''; }, 1800);
+          setTimeout(refreshPane, 350);
+        } catch (error) {
+          $('send-status').className = 'send-status error';
+          $('send-status').textContent = error.message;
+          $('send-button').disabled = false;
+        }
+      });
+      window.addEventListener('popstate', (event) => { if (!event.state?.sessionId && state.selectedId) closeDetail(false); });
+
+      bootstrapToken();
+      if (state.token) {
+        refreshBoard();
+        state.boardTimer = setInterval(refreshBoard, 3000);
+      }
+    })();
+  </script>
+</body>
+</html>

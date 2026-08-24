@@ -1,5 +1,6 @@
 mod plugins;
 mod tmux_scanner;
+mod remote_server;
 
 use chrono::{DateTime, Utc};
 use parking_lot::RwLock;
@@ -91,6 +92,14 @@ pub struct AppSettings {
     pub input_sound: SoundConfig,
     #[serde(default)]
     pub complete_sound: SoundConfig,
+    #[serde(default)]
+    pub remote_access_enabled: bool,
+    #[serde(default = "default_remote_bind_address")]
+    pub remote_bind_address: String,
+    #[serde(default = "default_remote_port")]
+    pub remote_port: u16,
+    #[serde(default)]
+    pub remote_access_token: String,
 }
 
 fn default_terminal() -> String {
@@ -105,6 +114,14 @@ fn default_true() -> bool {
     true
 }
 
+fn default_remote_bind_address() -> String {
+    "auto".to_string()
+}
+
+fn default_remote_port() -> u16 {
+    9399
+}
+
 impl Default for AppSettings {
     fn default() -> Self {
         Self {
@@ -117,6 +134,10 @@ impl Default for AppSettings {
                 enabled: false,
                 sound: None,
             },
+            remote_access_enabled: false,
+            remote_bind_address: default_remote_bind_address(),
+            remote_port: default_remote_port(),
+            remote_access_token: String::new(),
         }
     }
 }
@@ -212,7 +233,14 @@ fn save_settings(settings: &AppSettings) -> Result<(), String> {
         fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
     let json = serde_json::to_string_pretty(settings).map_err(|e| e.to_string())?;
-    fs::write(&path, json).map_err(|e| e.to_string())
+    fs::write(&path, json).map_err(|e| e.to_string())?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o600))
+            .map_err(|e| e.to_string())?;
+    }
+    Ok(())
 }
 
 /// Detect which terminal app is installed and running
@@ -467,7 +495,21 @@ fn get_settings() -> AppSettings {
 // Tauri command: Update settings
 #[tauri::command]
 fn update_settings(settings: AppSettings) -> Result<(), String> {
+    remote_server::validate_settings(&settings)?;
     save_settings(&settings)
+}
+
+#[tauri::command]
+fn get_remote_access_info() -> remote_server::RemoteAccessInfo {
+    remote_server::remote_access_info(&load_settings())
+}
+
+#[tauri::command]
+fn generate_remote_access_token() -> Result<String, String> {
+    let mut settings = load_settings();
+    settings.remote_access_token = remote_server::generate_access_token();
+    save_settings(&settings)?;
+    Ok(settings.remote_access_token)
 }
 
 // Tauri command: Get available terminals
@@ -2261,6 +2303,8 @@ pub fn run() {
             get_settings,
             update_settings,
             get_available_terminals,
+            get_remote_access_info,
+            generate_remote_access_token,
             get_session_meta,
             update_session_meta,
             upsert_session_group,
@@ -2314,6 +2358,7 @@ pub fn run() {
 
             let state_hook = state.clone();
             let state_tmux = state.clone();
+            let state_remote = state.clone();
             let app_handle_hook = app.handle().clone();
             let app_handle_tmux = app.handle().clone();
 
@@ -2321,6 +2366,12 @@ pub fn run() {
             let shutdown_hook = shutdown_rx.clone();
             tauri::async_runtime::spawn(async move {
                 start_hook_server(state_hook, app_handle_hook, shutdown_hook).await;
+            });
+
+            // Start optional Tailscale-only remote server. It stays dormant until enabled.
+            let shutdown_remote = shutdown_rx.clone();
+            tauri::async_runtime::spawn(async move {
+                remote_server::start_remote_server(state_remote, shutdown_remote).await;
             });
 
             // Start tmux scanner in background (fallback, lower frequency)

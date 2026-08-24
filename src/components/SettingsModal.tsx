@@ -1,8 +1,8 @@
 import { useState, useEffect } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { open } from '@tauri-apps/plugin-dialog';
-import { Volume2, Check, X, AlertTriangle, Download, RefreshCw } from 'lucide-react';
-import type { AppSettings, SoundConfig, HookStatus, SetupResult } from '../types';
+import { Volume2, Check, X, AlertTriangle, Download, RefreshCw, Copy, RotateCw, Wifi } from 'lucide-react';
+import type { AppSettings, SoundConfig, HookStatus, SetupResult, RemoteAccessInfo } from '../types';
 
 interface SettingsModalProps {
   isOpen: boolean;
@@ -35,6 +35,10 @@ const defaultSettings: AppSettings = {
   permission_sound: { enabled: true, sound: null },
   input_sound: { enabled: true, sound: null },
   complete_sound: { enabled: false, sound: null },
+  remote_access_enabled: false,
+  remote_bind_address: 'auto',
+  remote_port: 9399,
+  remote_access_token: '',
 };
 
 interface SoundConfigRowProps {
@@ -120,9 +124,28 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
   const [hookStatus, setHookStatus] = useState<HookStatus | null>(null);
   const [isInstallingHooks, setIsInstallingHooks] = useState(false);
   const [setupMessage, setSetupMessage] = useState<{ text: string; success: boolean } | null>(null);
+  const [remoteInfo, setRemoteInfo] = useState<RemoteAccessInfo | null>(null);
+  const [isCheckingRemoteInfo, setIsCheckingRemoteInfo] = useState(true);
+  const [remoteInfoError, setRemoteInfoError] = useState<string | null>(null);
+  const [isGeneratingToken, setIsGeneratingToken] = useState(false);
+  const [copiedPairingLink, setCopiedPairingLink] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
 
   const refreshHookStatus = () => {
     invoke<HookStatus>('check_hook_status').then(setHookStatus).catch(console.error);
+  };
+
+  const refreshRemoteInfo = async () => {
+    setIsCheckingRemoteInfo(true);
+    setRemoteInfoError(null);
+    try {
+      setRemoteInfo(await invoke<RemoteAccessInfo>('get_remote_access_info'));
+    } catch (error) {
+      setRemoteInfo(null);
+      setRemoteInfoError(String(error));
+    } finally {
+      setIsCheckingRemoteInfo(false);
+    }
   };
 
   useEffect(() => {
@@ -130,8 +153,11 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
       invoke<AppSettings>('get_settings').then(setSettings).catch(console.error);
       invoke<string[]>('get_available_terminals').then(setAvailableTerminals).catch(console.error);
       refreshHookStatus();
+      void refreshRemoteInfo();
     } else {
       setSetupMessage(null);
+      setCopiedPairingLink(false);
+      setSaveError(null);
     }
   }, [isOpen]);
 
@@ -151,14 +177,64 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
 
   const handleSave = async () => {
     setIsSaving(true);
+    setSaveError(null);
     try {
       await invoke('update_settings', { settings });
       onClose();
     } catch (e) {
-      console.error('Failed to save settings:', e);
+      setSaveError(String(e));
     } finally {
       setIsSaving(false);
     }
+  };
+
+  const setRemoteEnabled = async (enabled: boolean) => {
+    let token = settings.remote_access_token;
+    if (enabled && !token) {
+      setIsGeneratingToken(true);
+      try {
+        token = await invoke<string>('generate_remote_access_token');
+        refreshRemoteInfo();
+      } catch (e) {
+        setSaveError(`Could not generate an access token: ${e}`);
+        setIsGeneratingToken(false);
+        return;
+      }
+      setIsGeneratingToken(false);
+    }
+    setSettings((current) => ({
+      ...current,
+      remote_access_enabled: enabled,
+      remote_access_token: token,
+    }));
+  };
+
+  const regenerateRemoteToken = async () => {
+    setIsGeneratingToken(true);
+    setCopiedPairingLink(false);
+    try {
+      const token = await invoke<string>('generate_remote_access_token');
+      setSettings((current) => ({ ...current, remote_access_token: token }));
+      refreshRemoteInfo();
+    } catch (e) {
+      setSaveError(`Could not regenerate the access token: ${e}`);
+    } finally {
+      setIsGeneratingToken(false);
+    }
+  };
+
+  const pairingHost = remoteInfo?.bindAddress?.includes(':')
+    ? `[${remoteInfo.bindAddress}]`
+    : remoteInfo?.bindAddress;
+  const pairingUrl = pairingHost && settings.remote_access_token
+    ? `http://${pairingHost}:${settings.remote_port}/#token=${settings.remote_access_token}`
+    : null;
+
+  const copyPairingLink = async () => {
+    if (!pairingUrl) return;
+    await navigator.clipboard.writeText(pairingUrl);
+    setCopiedPairingLink(true);
+    window.setTimeout(() => setCopiedPairingLink(false), 1800);
   };
 
   if (!isOpen) return null;
@@ -241,6 +317,115 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
                 onChange={(c) => setSettings({ ...settings, complete_sound: c })}
               />
             </div>
+          </div>
+
+          <div className="settings-group remote-access-settings">
+            <div className="remote-access-heading">
+              <div>
+                <label className="settings-label">Remote access</label>
+                <p className="settings-description">
+                  Check agent status, read a tmux pane, and send a response from your phone.
+                </p>
+              </div>
+              <span className={`remote-network-badge ${remoteInfo?.tailscaleAvailable ? 'available' : ''} ${remoteInfoError ? 'error' : ''}`}>
+                <Wifi size={13} />
+                {isCheckingRemoteInfo
+                  ? 'Checking Tailscale…'
+                  : remoteInfoError
+                    ? 'Tailscale check failed'
+                    : remoteInfo?.tailscaleAvailable
+                      ? 'Tailscale ready'
+                      : 'Tailscale unavailable'}
+              </span>
+            </div>
+
+            <label className="settings-checkbox remote-access-toggle">
+              <input
+                type="checkbox"
+                checked={settings.remote_access_enabled}
+                disabled={isGeneratingToken || (!settings.remote_access_enabled && (isCheckingRemoteInfo || !remoteInfo?.tailscaleAvailable))}
+                onChange={(event) => setRemoteEnabled(event.target.checked)}
+              />
+              <span>Serve C3 on this Mac&apos;s Tailscale address</span>
+            </label>
+            {!settings.remote_access_enabled && !isCheckingRemoteInfo && !remoteInfo?.tailscaleAvailable && (
+              <p className="remote-network-help">
+                {remoteInfoError
+                  ? 'C3 could not check Tailscale. Close Settings, confirm Tailscale is running, and try again.'
+                  : 'Connect Tailscale on this Mac before enabling remote access.'}
+              </p>
+            )}
+
+            {settings.remote_access_enabled && (
+              <div className="remote-access-panel">
+                {remoteInfo?.error ? (
+                  <div className="remote-access-warning">
+                    <AlertTriangle size={14} />
+                    <span>{remoteInfo.error}</span>
+                  </div>
+                ) : (
+                  <div className="remote-access-address">
+                    <span>Private address</span>
+                    <strong>{remoteInfo?.tailscaleIp || 'Detecting…'}</strong>
+                  </div>
+                )}
+
+                <label className="remote-port-field">
+                  <span>Port</span>
+                  <input
+                    type="number"
+                    min={1024}
+                    max={65535}
+                    value={settings.remote_port}
+                    onChange={(event) => setSettings({
+                      ...settings,
+                      remote_port: Number(event.target.value),
+                    })}
+                  />
+                </label>
+
+                <div className="pairing-link-field">
+                  <label htmlFor="remote-pairing-link">Pairing link</label>
+                  <div>
+                    <input
+                      id="remote-pairing-link"
+                      type="text"
+                      readOnly
+                      value={pairingUrl || 'Connect Tailscale to create a pairing link'}
+                    />
+                    <button
+                      type="button"
+                      className="remote-icon-btn"
+                      onClick={copyPairingLink}
+                      disabled={!pairingUrl}
+                      aria-label="Copy pairing link"
+                      title="Copy pairing link"
+                    >
+                      {copiedPairingLink ? <Check size={15} /> : <Copy size={15} />}
+                    </button>
+                  </div>
+                </div>
+
+                <button
+                  type="button"
+                  className="remote-token-btn"
+                  onClick={regenerateRemoteToken}
+                  disabled={isGeneratingToken}
+                >
+                  <RotateCw size={13} className={isGeneratingToken ? 'spin' : ''} />
+                  Replace access token
+                </button>
+
+                <ol className="remote-setup-tips">
+                  <li>Connect this Mac and your iPhone to Tailscale.</li>
+                  <li>Save settings, then open the pairing link in Safari or C3 Remote.</li>
+                  <li>In Safari, use Share → Add to Home Screen for an app-like shortcut.</li>
+                </ol>
+                <p className="remote-security-note">
+                  Keep this private: do not port-forward this address or bind C3 to your LAN.
+                </p>
+              </div>
+            )}
           </div>
 
           <div className="settings-group">
@@ -337,14 +522,21 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
           <div className="settings-info">
             <h3>About C3</h3>
             <p>
-              C3 monitors your tmux panes for Claude Code and Codex sessions and displays
-              them in a unified dashboard.
+              C3 monitors your tmux panes for Claude Code, Codex, and OMP sessions and
+              displays them in a unified dashboard.
             </p>
             <p className="settings-requirements">
-              <strong>Requirements:</strong> tmux, Claude Code or Codex
+              <strong>Requirements:</strong> tmux and Claude Code, Codex, or OMP
             </p>
           </div>
         </div>
+
+          {saveError && (
+            <div className="settings-save-error" role="alert">
+              <AlertTriangle size={14} />
+              <span>{saveError}</span>
+            </div>
+          )}
 
         <div className="settings-footer">
           <button className="settings-btn" onClick={onClose}>Cancel</button>

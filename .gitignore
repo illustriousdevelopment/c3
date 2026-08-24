@@ -15,6 +15,10 @@ dist-ssr
 # Rust build artifacts
 target/
 
+# Generated iOS build products
+ios/build/
+ios/*.xcodeproj/
+
 # Environment and secrets
 .env
 .env.*
@@ -22,6 +26,7 @@ target/
 *.pem
 *.key
 *.cert
+*.p8
 
 # Editor directories and files
 .vscode/*
