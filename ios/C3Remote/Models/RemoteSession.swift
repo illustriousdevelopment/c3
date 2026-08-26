@@ -88,10 +88,22 @@ struct RemoteSession: Identifiable, Codable, Hashable {
     }
 }
 
+struct TerminalSpan: Codable, Hashable {
+    let text: String
+    let foreground: String?
+    let background: String?
+    let bold: Bool?
+    let dim: Bool?
+    let italic: Bool?
+    let underline: Bool?
+}
+
 struct PaneCapture: Codable {
     let sessionId: String
     let projectName: String
     let output: String
+    let styledLines: [[TerminalSpan]]?
+    let revision: String?
     let capturedAt: String
 }
 

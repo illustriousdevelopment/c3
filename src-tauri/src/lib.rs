@@ -1,3 +1,4 @@
+mod ansi;
 mod plugins;
 mod tmux_scanner;
 mod remote_server;

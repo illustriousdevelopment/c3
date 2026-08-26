@@ -3,6 +3,21 @@ import SwiftUI
 struct SessionBoardView: View {
     @EnvironmentObject private var store: RemoteStore
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    @State private var searchText = ""
+    @State private var navigationPath: [RemoteSession] = []
+
+    private var filteredSessions: [RemoteSession] {
+        let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !query.isEmpty else { return store.orderedSessions }
+        return store.orderedSessions.filter { session in
+            [
+                session.displayName,
+                session.projectPath ?? "",
+                session.agentKind ?? "",
+                session.pendingAction?.description ?? "",
+            ].contains { $0.localizedCaseInsensitiveContains(query) }
+        }
+    }
 
     private var columns: [GridItem] {
         if dynamicTypeSize.isAccessibilitySize {
@@ -15,7 +30,7 @@ struct SessionBoardView: View {
     }
 
     var body: some View {
-        NavigationStack {
+        NavigationStack(path: $navigationPath) {
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 14) {
                     statusLine
@@ -44,9 +59,17 @@ struct SessionBoardView: View {
                         )
                         .frame(maxWidth: .infinity)
                         .padding(.top, 80)
+                    } else if filteredSessions.isEmpty {
+                        ContentUnavailableView(
+                            "No matching agents",
+                            systemImage: "magnifyingglass",
+                            description: Text("Try another project, task, or agent name.")
+                        )
+                        .frame(maxWidth: .infinity)
+                        .padding(.top, 70)
                     } else {
                         LazyVGrid(columns: columns, spacing: 10) {
-                            ForEach(store.orderedSessions) { session in
+                            ForEach(filteredSessions) { session in
                                 NavigationLink(value: session) {
                                     SessionTile(session: session)
                                 }
@@ -74,12 +97,18 @@ struct SessionBoardView: View {
                     .accessibilityLabel("Connection options")
                 }
             }
+            .searchable(
+                text: $searchText,
+                placement: .navigationBarDrawer(displayMode: .always),
+                prompt: "Search agents"
+            )
             .navigationDestination(for: RemoteSession.self) { session in
                 SessionDetailView(session: session)
             }
             .refreshable { await store.refresh() }
             .task {
                 await store.refresh()
+                openDebugSessionIfNeeded()
                 while !Task.isCancelled {
                     try? await Task.sleep(for: .seconds(3))
                     await store.refresh()
@@ -90,7 +119,9 @@ struct SessionBoardView: View {
 
     private var statusLine: some View {
         HStack {
-            Text("\(store.sessions.count) \(store.sessions.count == 1 ? "agent" : "agents")")
+            Text(searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                 ? "\(store.sessions.count) \(store.sessions.count == 1 ? "agent" : "agents")"
+                 : "\(filteredSessions.count) of \(store.sessions.count) agents")
                 .font(.headline)
             Spacer()
             HStack(spacing: 6) {
@@ -105,4 +136,14 @@ struct SessionBoardView: View {
         .padding(.top, 4)
         .accessibilityElement(children: .combine)
     }
+
+    private func openDebugSessionIfNeeded() {
+#if DEBUG
+        guard navigationPath.isEmpty,
+              let sessionID = ProcessInfo.processInfo.environment["C3_REMOTE_SESSION_ID"],
+              let session = store.sessions.first(where: { $0.id == sessionID }) else { return }
+        navigationPath.append(session)
+#endif
+    }
 }
+

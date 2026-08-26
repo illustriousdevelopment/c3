@@ -1,3 +1,4 @@
+use crate::ansi::{parse_ansi_capture, AnsiSpan, ParsedAnsi};
 use crate::{cmd, load_settings, AppSettings, AppState, C3Session};
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
@@ -64,6 +65,8 @@ struct PaneCapture {
     session_id: String,
     project_name: String,
     output: String,
+    styled_lines: Vec<Vec<AnsiSpan>>,
+    revision: String,
     captured_at: String,
 }
 
@@ -354,17 +357,19 @@ async fn handle_remote_request(
                 Some(target) => target.to_string(),
                 None => return json_error(&mut stream, 409, "Session has no tmux pane").await,
             };
-            let output = tokio::task::spawn_blocking(move || capture_pane(&target))
+            let capture = tokio::task::spawn_blocking(move || capture_pane(&target))
                 .await
                 .map_err(|error| error.to_string())?;
-            let output = match output {
-                Ok(output) => output,
+            let capture = match capture {
+                Ok(capture) => capture,
                 Err(error) => return json_error(&mut stream, 502, &error).await,
             };
             let body = serde_json::to_vec(&PaneCapture {
                 session_id: session.id,
                 project_name: session.project_name,
-                output,
+                output: capture.plain,
+                styled_lines: capture.styled_lines,
+                revision: capture.revision,
                 captured_at: Utc::now().to_rfc3339(),
             })
             .map_err(|error| error.to_string())?;
@@ -409,9 +414,9 @@ fn find_session(state: &Arc<AppState>, session_id: &str) -> Option<C3Session> {
     state.sessions.read().get(session_id).cloned()
 }
 
-fn capture_pane(target: &str) -> Result<String, String> {
+fn capture_pane(target: &str) -> Result<ParsedAnsi, String> {
     let output = cmd("tmux")
-        .args(["capture-pane", "-p", "-t", target, "-S", "-200"])
+        .args(["capture-pane", "-p", "-e", "-t", target, "-S", "-200"])
         .output()
         .map_err(|error| format!("Could not capture tmux pane: {error}"))?;
     if !output.status.success() {
@@ -426,9 +431,12 @@ fn capture_pane(target: &str) -> Result<String, String> {
         while !output.is_char_boundary(start) {
             start += 1;
         }
+        if let Some(line_end) = output[start..].find('\n') {
+            start += line_end + 1;
+        }
         output = output[start..].to_string();
     }
-    Ok(output)
+    Ok(parse_ansi_capture(&output))
 }
 
 fn send_tmux_input(target: &str, text: &str, submit: bool) -> Result<(), String> {

@@ -73,7 +73,31 @@
     main { width: min(920px, 100%); margin: 0 auto; padding: 19px 14px calc(30px + var(--safe-bottom)); }
     .board-heading { display: flex; align-items: baseline; justify-content: space-between; margin: 0 0 15px; }
     .board-heading h1 { margin: 0; font-size: 17px; font-weight: 540; letter-spacing: -0.01em; }
-    .updated { color: var(--faint); font-size: 12px; }
+    .updated { color: var(--muted); font-size: 12px; }
+    .session-search {
+      position: relative;
+      margin: 0 0 13px;
+    }
+    .session-search svg {
+      position: absolute;
+      left: 12px;
+      top: 50%;
+      transform: translateY(-50%);
+      color: var(--faint);
+      pointer-events: none;
+    }
+    .session-search input {
+      width: 100%;
+      min-height: 44px;
+      padding: 9px 12px 9px 38px;
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      background: var(--panel);
+      color: var(--text);
+      appearance: none;
+    }
+    .session-search input::placeholder { color: var(--muted); }
+    .session-search input:focus { border-color: var(--blue); outline: none; }
     .session-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
     .session-card {
       position: relative;
@@ -136,6 +160,8 @@
       tab-size: 2;
     }
     .terminal.loading { color: var(--faint); }
+    .terminal-line { min-height: 1.48em; }
+    .terminal-span.dim { opacity: 0.62; }
     .composer {
       position: sticky;
       bottom: 0;
@@ -235,11 +261,15 @@
           <h1 id="agent-count">Agents</h1>
           <span id="updated" class="updated"></span>
         </div>
+        <label class="session-search">
+          <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+          <input id="session-search" type="search" autocomplete="off" autocapitalize="off" placeholder="Search agents" aria-label="Search agents">
+        </label>
         <div id="session-grid" class="session-grid"></div>
         <div id="board-empty" class="empty" hidden><strong>No agent panes</strong>C3 will add sessions when an agent starts in tmux.</div>
       </section>
 
-      <section id="detail" class="detail" hidden>
+      <section id="detail" class="detail" aria-labelledby="detail-name" tabindex="-1" hidden>
         <div class="detail-header">
           <button id="back-button" class="back-button" type="button" aria-label="Back to agents">
             <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m15 18-6-6 6-6"/></svg>
@@ -252,7 +282,7 @@
             <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 11a8.1 8.1 0 0 0-15.5-2M4 4v5h5"/><path d="M4 13a8.1 8.1 0 0 0 15.5 2M20 20v-5h-5"/></svg>
           </button>
         </div>
-        <pre id="terminal" class="terminal loading" tabindex="0">Loading pane…</pre>
+        <div id="terminal" class="terminal loading" role="region" aria-label="Tmux pane output" tabindex="0">Loading pane…</div>
         <form id="composer" class="composer">
           <textarea id="response" rows="1" maxlength="65536" placeholder="Type or dictate a response" aria-label="Response"></textarea>
           <button id="send-button" class="send-button" type="submit" disabled>Send</button>
@@ -265,7 +295,18 @@
   <script>
     (() => {
       const $ = (id) => document.getElementById(id);
-      const state = { token: '', sessions: [], boardFingerprint: '', selectedId: null, boardTimer: null, paneTimer: null };
+      const state = {
+        token: '',
+        sessions: [],
+        boardFingerprint: '',
+        searchQuery: '',
+        selectedId: null,
+        returnFocusSessionId: null,
+        paneRevision: '',
+        paneRequestSerial: 0,
+        boardTimer: null,
+        paneTimer: null,
+      };
       const attentionOrder = { awaiting_permission: 0, awaiting_input: 1, processing: 2, spawning: 2, error: 3, complete: 4 };
       const stateLabel = (value) => ({
         awaiting_permission: 'PERMISSION', awaiting_input: 'NEEDS INPUT', processing: 'WORKING',
@@ -327,12 +368,26 @@
 
       function renderBoard() {
         const focusedSessionId = document.activeElement?.dataset?.sessionId || null;
-        const sessions = [...state.sessions].sort((a, b) => {
+        const query = state.searchQuery.trim().toLowerCase();
+        const allSessions = [...state.sessions].sort((a, b) => {
           const priority = (attentionOrder[a.state] ?? 9) - (attentionOrder[b.state] ?? 9);
           return priority || new Date(b.lastActivity) - new Date(a.lastActivity);
         });
-        $('agent-count').textContent = `${sessions.length} ${sessions.length === 1 ? 'agent' : 'agents'}`;
+        const sessions = query
+          ? allSessions.filter((session) => [
+              displayName(session),
+              session.projectPath,
+              session.agentKind,
+              session.pendingAction?.description,
+            ].some((value) => String(value || '').toLowerCase().includes(query)))
+          : allSessions;
+        $('agent-count').textContent = query
+          ? `${sessions.length} of ${allSessions.length} agents`
+          : `${sessions.length} ${sessions.length === 1 ? 'agent' : 'agents'}`;
         $('board-empty').hidden = sessions.length > 0;
+        $('board-empty').innerHTML = state.sessions.length
+          ? '<strong>No matching agents</strong>Try another project, task, or agent name.'
+          : '<strong>No agent panes</strong>C3 will add sessions when an agent starts in tmux.';
         $('session-grid').innerHTML = sessions.map((session) => `
           <button class="session-card" type="button" data-session-id="${escapeHtml(session.id)}">
             <span class="state-light ${escapeHtml(session.state)}" aria-hidden="true"></span>
@@ -375,20 +430,56 @@
         }
       }
 
+      function renderStyledCapture(terminal, capture) {
+        if (!Array.isArray(capture.styledLines)) {
+          terminal.textContent = capture.output || 'Pane is empty.';
+          return;
+        }
+        const colorPattern = /^#[0-9a-f]{6}$/i;
+        const fragment = document.createDocumentFragment();
+        capture.styledLines.forEach((spans) => {
+          const line = document.createElement('div');
+          line.className = 'terminal-line';
+          if (!spans.length) {
+            line.textContent = '\u200b';
+          } else {
+            spans.forEach((source) => {
+              const span = document.createElement('span');
+              span.className = `terminal-span${source.dim ? ' dim' : ''}`;
+              span.textContent = source.text;
+              if (colorPattern.test(source.foreground || '')) span.style.color = source.foreground;
+              if (colorPattern.test(source.background || '')) span.style.backgroundColor = source.background;
+              if (source.bold) span.style.fontWeight = '700';
+              if (source.italic) span.style.fontStyle = 'italic';
+              if (source.underline) span.style.textDecoration = 'underline';
+              line.appendChild(span);
+            });
+          }
+          fragment.appendChild(line);
+        });
+        terminal.replaceChildren(fragment);
+      }
+
       async function refreshPane() {
         const requestedSessionId = state.selectedId;
         if (!requestedSessionId) return;
+        const requestSerial = ++state.paneRequestSerial;
         const terminal = $('terminal');
         try {
           const capture = await api(`/api/capture?sessionId=${encodeURIComponent(requestedSessionId)}`);
-          if (state.selectedId !== requestedSessionId) return;
+          if (state.selectedId !== requestedSessionId || requestSerial !== state.paneRequestSerial) return;
+          if (capture.revision === state.paneRevision) {
+            setConnection('online', 'Connected');
+            return;
+          }
           const nearBottom = terminal.scrollHeight - terminal.scrollTop - terminal.clientHeight < 80;
-          terminal.textContent = capture.output || 'Pane is empty.';
+          state.paneRevision = capture.revision || '';
+          renderStyledCapture(terminal, capture);
           terminal.classList.remove('loading');
           if (nearBottom) terminal.scrollTop = terminal.scrollHeight;
           setConnection('online', 'Connected');
         } catch (error) {
-          if (state.selectedId !== requestedSessionId) return;
+          if (state.selectedId !== requestedSessionId || requestSerial !== state.paneRequestSerial) return;
           terminal.textContent = `Could not load pane.\n\n${error.message}`;
           terminal.classList.remove('loading');
           setConnection('offline', 'Offline');
@@ -398,7 +489,10 @@
       function openDetail(id) {
         const session = state.sessions.find((item) => item.id === id);
         if (!session) return;
+        state.returnFocusSessionId = id;
         state.selectedId = id;
+        state.paneRevision = '';
+        state.paneRequestSerial += 1;
         $('board').hidden = true;
         $('detail').hidden = false;
         $('detail-name').textContent = displayName(session);
@@ -413,14 +507,23 @@
         clearInterval(state.paneTimer);
         refreshPane();
         state.paneTimer = setInterval(refreshPane, 1500);
+        $('detail').focus({ preventScroll: true });
       }
 
       function closeDetail(updateHistory = true) {
+        const returnFocusSessionId = state.returnFocusSessionId;
         state.selectedId = null;
+        state.returnFocusSessionId = null;
+        state.paneRevision = '';
+        state.paneRequestSerial += 1;
         clearInterval(state.paneTimer);
         $('detail').hidden = true;
         $('board').hidden = false;
         if (updateHistory) history.pushState({}, '', window.location.pathname);
+        const card = returnFocusSessionId
+          ? document.querySelector(`[data-session-id="${CSS.escape(returnFocusSessionId)}"]`)
+          : null;
+        (card || $('session-search')).focus({ preventScroll: true });
       }
 
       $('pairing-button').addEventListener('click', async () => {
@@ -437,6 +540,10 @@
       });
       $('back-button').addEventListener('click', () => closeDetail());
       $('refresh-button').addEventListener('click', refreshPane);
+      $('session-search').addEventListener('input', (event) => {
+        state.searchQuery = event.target.value;
+        renderBoard();
+      });
       $('response').addEventListener('input', (event) => { $('send-button').disabled = !event.target.value.trim(); });
       $('composer').addEventListener('submit', async (event) => {
         event.preventDefault();

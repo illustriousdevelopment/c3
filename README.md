@@ -48,7 +48,7 @@ brew install --cask c3
 
 Download the latest `.dmg` from [Releases](https://github.com/illustriousdevelopment/c3/releases), open it, and drag C3 to Applications.
 
-Current release: [v0.3.0](https://github.com/illustriousdevelopment/c3/releases/tag/v0.3.0)
+Current release: [v0.3.1](https://github.com/illustriousdevelopment/c3/releases/tag/v0.3.1)
 
 ## Setup
 
@@ -89,7 +89,7 @@ Remote access is optional and disabled by default.
 4. Copy the pairing link from Settings and open it in Safari on the iPhone.
 5. Optionally use **Share → Add to Home Screen** for an app-like shortcut.
 
-The mobile view lists every detected agent, opens the latest tmux pane output, and sends typed or dictated responses back to that exact pane. C3 binds only to loopback or Tailscale's `100.64.0.0/10` range and requires a generated access token. Do not port-forward the remote port or expose it on a LAN/public interface.
+The mobile view can search every detected agent, opens recent tmux output with ANSI colors and text styling, and sends typed or dictated responses back to that exact pane. The native app supports portrait and landscape. C3 binds only to loopback or Tailscale's `100.64.0.0/10` range and requires a generated access token. Do not port-forward the remote port or expose it on a LAN/public interface.
 
 The native SwiftUI client lives in [`ios/`](ios/) and accepts the same pairing link. See [REMOTE_ACCESS.md](REMOTE_ACCESS.md) for the API, security model, and product design.
 

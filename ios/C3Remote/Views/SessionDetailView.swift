@@ -1,10 +1,13 @@
 import SwiftUI
+import UIKit
 
 struct SessionDetailView: View {
     @EnvironmentObject private var store: RemoteStore
     let session: RemoteSession
 
-    @State private var paneOutput = "Loading pane…"
+    @State private var paneOutput = AttributedString("Loading pane…")
+    @State private var paneRevision = ""
+    @State private var paneRequestGeneration = 0
     @State private var draft = ""
     @State private var isSending = false
     @State private var statusMessage: String?
@@ -23,7 +26,7 @@ struct SessionDetailView: View {
                     .id("pane-bottom")
             }
             .background(Color.black)
-            .onChange(of: paneOutput) {
+            .onChange(of: paneRevision) {
                 withAnimation(.none) {
                     proxy.scrollTo("pane-bottom", anchor: .bottom)
                 }
@@ -94,12 +97,54 @@ struct SessionDetailView: View {
     }
 
     private func refreshPane() async {
+        paneRequestGeneration += 1
+        let generation = paneRequestGeneration
         do {
-            paneOutput = try await store.capture(sessionID: session.id).output
+            let capture = try await store.capture(sessionID: session.id)
+            guard generation == paneRequestGeneration else { return }
+            if let revision = capture.revision, revision == paneRevision {
+                errorMessage = nil
+                return
+            }
+            paneOutput = styledOutput(from: capture)
+            paneRevision = capture.revision ?? capture.capturedAt
             errorMessage = nil
         } catch {
+            guard generation == paneRequestGeneration else { return }
             errorMessage = error.localizedDescription
         }
+    }
+
+    private func styledOutput(from capture: PaneCapture) -> AttributedString {
+        guard let lines = capture.styledLines else {
+            return AttributedString(capture.output)
+        }
+        var result = AttributedString()
+        for (lineIndex, line) in lines.enumerated() {
+            for span in line {
+                var attributes = AttributeContainer()
+                var font = Font.system(.caption, design: .monospaced)
+                if span.bold == true { font = font.bold() }
+                if span.italic == true { font = font.italic() }
+                attributes.font = font
+                if let foreground = span.foreground.flatMap(Color.init(ansiHex:)) {
+                    attributes.foregroundColor = span.dim == true ? foreground.opacity(0.62) : foreground
+                } else if span.dim == true {
+                    attributes.foregroundColor = Color(uiColor: .lightText).opacity(0.62)
+                }
+                if let background = span.background.flatMap(Color.init(ansiHex:)) {
+                    attributes.backgroundColor = background
+                }
+                if span.underline == true {
+                    attributes.underlineStyle = .single
+                }
+                result.append(AttributedString(span.text, attributes: attributes))
+            }
+            if lineIndex < lines.count - 1 {
+                result.append(AttributedString("\n"))
+            }
+        }
+        return result
     }
 
     private func submitResponse() {
@@ -109,20 +154,38 @@ struct SessionDetailView: View {
             isSending = true
             errorMessage = nil
             statusMessage = "Sending…"
+            UIAccessibility.post(notification: .announcement, argument: "Sending response")
             do {
                 try await store.send(sessionID: session.id, text: response)
                 draft = ""
                 statusMessage = "Sent"
+                UIAccessibility.post(notification: .announcement, argument: "Response sent")
                 composerFocused = false
                 try? await Task.sleep(for: .milliseconds(350))
                 await refreshPane()
-                try? await Task.sleep(for: .seconds(1))
+                try? await Task.sleep(for: .seconds(3))
                 if statusMessage == "Sent" { statusMessage = nil }
             } catch {
                 errorMessage = error.localizedDescription
                 statusMessage = nil
+                UIAccessibility.post(
+                    notification: .announcement,
+                    argument: "Could not send response. \(error.localizedDescription)"
+                )
             }
             isSending = false
         }
+    }
+}
+
+private extension Color {
+    init?(ansiHex: String) {
+        let value = ansiHex.trimmingCharacters(in: CharacterSet(charactersIn: "#"))
+        guard value.count == 6, let rgb = UInt64(value, radix: 16) else { return nil }
+        self.init(
+            red: Double((rgb >> 16) & 0xff) / 255,
+            green: Double((rgb >> 8) & 0xff) / 255,
+            blue: Double(rgb & 0xff) / 255
+        )
     }
 }

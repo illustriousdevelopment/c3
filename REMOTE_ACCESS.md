@@ -53,11 +53,12 @@ The Mac remains authoritative. Both clients use the same small HTTP API and neve
 The mobile board follows the supplied k-stack reference:
 
 - Dark, low-chrome top bar with C3 identity and connection state.
-- Agent count directly under the bar.
-- Two-column session cards on wider phones; one column on narrow screens.
+- Agent count and search directly under the bar.
+- Two-column session cards on wider phones; one column on narrow screens or at accessibility text sizes.
 - Project/session name, current task or pending action, explicit state label, agent kind, and a small state light.
 - No desktop lanes, charts, metrics, gradients, glass, or decorative dashboard widgets.
-- Session detail replaces the board with a readable monospace pane and a persistent response composer.
+- Session detail replaces the board with a monospace pane that preserves safe ANSI foreground/background colors, bold, dim, italic, and underline styling.
+- The native app supports portrait and landscape orientation.
 
 ## API
 
@@ -79,7 +80,11 @@ Returns up to 200 recent lines from the session’s tmux pane:
 {
   "sessionId": "tmux:0:22.0",
   "projectName": "carmelo-command-center",
-  "output": "…",
+  "output": "plain-text fallback",
+  "styledLines": [[
+    { "text": "working", "foreground": "#71b7ef", "bold": true }
+  ]],
+  "revision": "7fa9c1e52b44a180",
   "capturedAt": "2026-08-24T12:00:00Z"
 }
 ```
@@ -110,6 +115,7 @@ C3 writes the text through a temporary tmux buffer and sends Enter only when `su
 ## Reliability
 
 - Clients poll session summaries every 3 seconds and the open pane every 1.5 seconds.
+- Capture revisions let clients skip rebuilding the terminal view when the pane is unchanged.
 - Loss of connection preserves the last readable state and shows a direct reconnect message.
 - Server configuration changes restart only the remote listener, not C3 or tmux scanning.
 - Sending input resolves the session ID against C3’s current in-memory map immediately before writing.
@@ -122,5 +128,7 @@ C3 writes the text through a temporary tmux buffer and sends Enter only when `su
 - Binding to `0.0.0.0` or a non-Tailscale address is rejected.
 - A phone browser can list sessions, open a pane, and submit text to the correct pane.
 - The web board is usable at 390×844 and does not exceed two columns.
+- Session search filters by title, project, agent kind, and pending-action text.
+- Native portrait and landscape layouts preserve the two-column ceiling.
 - The iOS app accepts the same pairing URL and completes the same read/respond workflow.
 - Existing local hooks on `127.0.0.1:9398` continue unchanged.
