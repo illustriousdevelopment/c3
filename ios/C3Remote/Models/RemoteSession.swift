@@ -101,7 +101,7 @@ struct TerminalSpan: Codable, Hashable {
 struct PaneCapture: Codable {
     let sessionId: String
     let projectName: String
-    let output: String
+    let output: String?
     let styledLines: [[TerminalSpan]]?
     let revision: String?
     let capturedAt: String

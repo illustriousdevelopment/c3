@@ -8,10 +8,14 @@ struct SessionDetailView: View {
     @State private var paneOutput = AttributedString("Loading pane…")
     @State private var paneRevision = ""
     @State private var paneRequestGeneration = 0
+    @State private var liveMode = true
+    @State private var streamActive = false
     @State private var draft = ""
     @State private var isSending = false
     @State private var statusMessage: String?
-    @State private var errorMessage: String?
+    @State private var sendErrorMessage: String?
+    @State private var paneErrorMessage: String?
+    @State private var connectionMessage: String?
     @FocusState private var composerFocused: Bool
 
     var body: some View {
@@ -35,36 +39,70 @@ struct SessionDetailView: View {
         .navigationTitle(session.displayName)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
-            ToolbarItem(placement: .topBarTrailing) {
-                Button("Refresh", systemImage: "arrow.clockwise") {
-                    Task { await refreshPane() }
+            ToolbarItemGroup(placement: .topBarTrailing) {
+                Button {
+                    liveMode.toggle()
+                } label: {
+                    HStack(spacing: 5) {
+                        Image(systemName: liveMode
+                              ? "dot.radiowaves.left.and.right"
+                              : "leaf")
+                        Text(updateModeLabel)
+                    }
+                    .font(.caption.bold())
+                    .frame(minHeight: 44)
+                }
+                .accessibilityLabel("Live updates")
+                .accessibilityValue(updateModeLabel)
+                .accessibilityHint("Double-tap to switch between live streaming and battery saver polling")
+
+                if !liveMode {
+                    Button("Refresh", systemImage: "arrow.clockwise") {
+                        Task { await refreshPane() }
+                    }
                 }
             }
         }
+        .toolbarBackground(Color.black, for: .navigationBar)
+        .toolbarBackground(.visible, for: .navigationBar)
         .safeAreaInset(edge: .bottom, spacing: 0) {
             composer
         }
-        .task {
-            await refreshPane()
-            while !Task.isCancelled {
-                try? await Task.sleep(for: .milliseconds(1500))
-                await refreshPane()
-            }
+        .task(id: liveMode) {
+            await runPaneUpdates()
         }
+        .onChange(of: updateModeLabel) { _, mode in
+            UIAccessibility.post(
+                notification: .announcement,
+                argument: "Live updates: \(mode)"
+            )
+        }
+    }
+
+    private var updateModeLabel: String {
+        if !liveMode { return "Saver" }
+        return streamActive ? "Live" : "Fallback"
     }
 
     private var composer: some View {
         VStack(alignment: .leading, spacing: 7) {
-            if let errorMessage {
-                Label(errorMessage, systemImage: "exclamationmark.triangle.fill")
+            if let sendErrorMessage {
+                Label(sendErrorMessage, systemImage: "exclamationmark.triangle.fill")
                     .font(.caption)
                     .foregroundStyle(.red)
+            } else if let paneErrorMessage {
+                Label(paneErrorMessage, systemImage: "wifi.exclamationmark")
+                    .font(.caption)
+                    .foregroundStyle(.orange)
             } else if let statusMessage {
                 Text(statusMessage)
                     .font(.caption)
                     .foregroundStyle(.secondary)
+            } else if let connectionMessage {
+                Text(connectionMessage)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
-
             HStack(alignment: .bottom, spacing: 8) {
                 TextField("Type or dictate a response", text: $draft, axis: .vertical)
                     .lineLimit(1...5)
@@ -96,28 +134,90 @@ struct SessionDetailView: View {
         .background(.bar)
     }
 
+    private func runPaneUpdates() async {
+        streamActive = false
+        paneErrorMessage = nil
+        if !liveMode {
+            connectionMessage = "Battery saver · refreshes every 1.5 seconds"
+            await refreshPane()
+            while !Task.isCancelled {
+                do {
+                    try await Task.sleep(for: .milliseconds(1500))
+                } catch {
+                    return
+                }
+                await refreshPane()
+            }
+            return
+        }
+
+        connectionMessage = "Connecting live updates…"
+        var failures = 0
+        while !Task.isCancelled {
+            do {
+                let captures = try store.captureStream(sessionID: session.id)
+                for try await capture in captures {
+                    try Task.checkCancellation()
+                    applyPaneCapture(capture)
+                    streamActive = true
+                    failures = 0
+                    connectionMessage = nil
+                    paneErrorMessage = nil
+                }
+                throw RemoteAPIError.message("C3 live stream closed.")
+            } catch is CancellationError {
+                return
+            } catch RemoteAPIError.unauthorized {
+                streamActive = false
+                connectionMessage = "Pairing expired—paste a fresh C3 pairing link"
+                return
+            } catch {
+                guard !Task.isCancelled else { return }
+                streamActive = false
+                failures = min(failures + 1, 4)
+                connectionMessage = "Live updates interrupted—reconnecting"
+                await refreshPane()
+                let delayMilliseconds = 750 * (1 << (failures - 1))
+                    + Int.random(in: 0...250)
+                do {
+                    try await Task.sleep(for: .milliseconds(delayMilliseconds))
+                } catch {
+                    return
+                }
+            }
+        }
+    }
+
     private func refreshPane() async {
         paneRequestGeneration += 1
         let generation = paneRequestGeneration
         do {
             let capture = try await store.capture(sessionID: session.id)
             guard generation == paneRequestGeneration else { return }
-            if let revision = capture.revision, revision == paneRevision {
-                errorMessage = nil
-                return
-            }
-            paneOutput = styledOutput(from: capture)
-            paneRevision = capture.revision ?? capture.capturedAt
-            errorMessage = nil
+            applyPaneCapture(capture)
+            paneErrorMessage = nil
+        } catch RemoteAPIError.unauthorized {
+            guard generation == paneRequestGeneration else { return }
+            paneErrorMessage = "Pairing expired—paste a fresh C3 pairing link."
         } catch {
             guard generation == paneRequestGeneration else { return }
-            errorMessage = error.localizedDescription
+            if !liveMode {
+                paneErrorMessage = "Couldn’t refresh the pane. Retrying."
+            }
         }
+    }
+
+    private func applyPaneCapture(_ capture: PaneCapture) {
+        if let revision = capture.revision, revision == paneRevision {
+            return
+        }
+        paneOutput = styledOutput(from: capture)
+        paneRevision = capture.revision ?? capture.capturedAt
     }
 
     private func styledOutput(from capture: PaneCapture) -> AttributedString {
         guard let lines = capture.styledLines else {
-            return AttributedString(capture.output)
+            return AttributedString(capture.output ?? "")
         }
         var result = AttributedString()
         for (lineIndex, line) in lines.enumerated() {
@@ -152,7 +252,7 @@ struct SessionDetailView: View {
         guard !response.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
         Task {
             isSending = true
-            errorMessage = nil
+            sendErrorMessage = nil
             statusMessage = "Sending…"
             UIAccessibility.post(notification: .announcement, argument: "Sending response")
             do {
@@ -161,16 +261,18 @@ struct SessionDetailView: View {
                 statusMessage = "Sent"
                 UIAccessibility.post(notification: .announcement, argument: "Response sent")
                 composerFocused = false
-                try? await Task.sleep(for: .milliseconds(350))
-                await refreshPane()
+                if !liveMode {
+                    try? await Task.sleep(for: .milliseconds(350))
+                    await refreshPane()
+                }
                 try? await Task.sleep(for: .seconds(3))
                 if statusMessage == "Sent" { statusMessage = nil }
             } catch {
-                errorMessage = error.localizedDescription
+                sendErrorMessage = "Couldn’t send. Your response is still here; try again."
                 statusMessage = nil
                 UIAccessibility.post(
                     notification: .announcement,
-                    argument: "Could not send response. \(error.localizedDescription)"
+                    argument: "Couldn’t send. Your response is still here; try again."
                 )
             }
             isSending = false

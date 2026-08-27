@@ -6,11 +6,12 @@ use std::collections::HashMap;
 use std::io::Write as _;
 use std::net::{IpAddr, Ipv4Addr};
 use std::process::Stdio;
-use std::sync::Arc;
-use std::time::Duration;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use std::sync::{Arc, LazyLock};
+use std::time::{Duration, Instant};
+use tokio::io::{AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
-use tokio::sync::watch;
+use tokio::sync::{watch, Semaphore};
+use tokio::time::MissedTickBehavior;
 use uuid::Uuid;
 
 const REMOTE_INDEX: &str = include_str!("../remote/index.html");
@@ -18,6 +19,11 @@ const REMOTE_ICON: &[u8] = include_bytes!("../resources/icon.png");
 const MAX_HEADER_BYTES: usize = 16 * 1024;
 const MAX_INPUT_BYTES: usize = 64 * 1024;
 const MAX_CAPTURE_BYTES: usize = 512 * 1024;
+const REMOTE_STREAM_INTERVAL: Duration = Duration::from_millis(250);
+const REMOTE_STREAM_LIMIT: usize = 4;
+const MAX_STREAM_FRAME_BYTES: usize = 8 * 1024 * 1024;
+static REMOTE_STREAM_SLOTS: LazyLock<Arc<Semaphore>> =
+    LazyLock::new(|| Arc::new(Semaphore::new(REMOTE_STREAM_LIMIT)));
 const MANIFEST: &str = r##"{
   "name": "C3 Remote",
   "short_name": "C3",
@@ -64,7 +70,8 @@ struct RemoteInputRequest {
 struct PaneCapture {
     session_id: String,
     project_name: String,
-    output: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    output: Option<String>,
     styled_lines: Vec<Vec<AnsiSpan>>,
     revision: String,
     captured_at: String,
@@ -367,13 +374,26 @@ async fn handle_remote_request(
             let body = serde_json::to_vec(&PaneCapture {
                 session_id: session.id,
                 project_name: session.project_name,
-                output: capture.plain,
+                output: Some(capture.plain),
                 styled_lines: capture.styled_lines,
                 revision: capture.revision,
                 captured_at: Utc::now().to_rfc3339(),
             })
             .map_err(|error| error.to_string())?;
             write_response(&mut stream, 200, "application/json", &body).await
+        }
+        ("GET", "/api/stream") => {
+            let session_id = match query_value(&request.target, "sessionId") {
+                Some(session_id) => session_id,
+                None => return json_error(&mut stream, 400, "Missing sessionId").await,
+            };
+            stream_pane_events(
+                stream,
+                state,
+                session_id,
+                settings.remote_access_token.clone(),
+            )
+            .await
         }
         ("POST", "/api/input") => {
             let input: RemoteInputRequest = match serde_json::from_slice(&request.body) {
@@ -408,6 +428,162 @@ async fn handle_remote_request(
         }
         _ => json_error(&mut stream, 404, "API route not found").await,
     }
+}
+
+
+fn remote_stream_slots() -> Arc<Semaphore> {
+    Arc::clone(&REMOTE_STREAM_SLOTS)
+}
+
+async fn stream_pane_events(
+    mut stream: TcpStream,
+    state: Arc<AppState>,
+    session_id: String,
+    access_token: String,
+) -> Result<(), String> {
+    let initial_session = match find_session(&state, &session_id) {
+        Some(session) => session,
+        None => return json_error(&mut stream, 404, "Session not found").await,
+    };
+    if initial_session.tmux_target.is_none() {
+        return json_error(&mut stream, 409, "Session has no tmux pane").await;
+    }
+    let _permit = match remote_stream_slots().try_acquire_owned() {
+        Ok(permit) => permit,
+        Err(_) => {
+            return json_error(
+                &mut stream,
+                429,
+                "Too many live pane streams. Close another live session and try again.",
+            )
+            .await
+        }
+    };
+
+    let stream_key = listener_key(&load_settings());
+    let headers = concat!(
+        "HTTP/1.1 200 OK\r\n",
+        "Content-Type: text/event-stream; charset=utf-8\r\n",
+        "Cache-Control: no-store\r\n",
+        "X-Content-Type-Options: nosniff\r\n",
+        "Referrer-Policy: no-referrer\r\n",
+        "Transfer-Encoding: chunked\r\n",
+        "Connection: keep-alive\r\n\r\n"
+    );
+    write_raw_stream(&mut stream, headers.as_bytes()).await?;
+    write_stream_chunk(&mut stream, b"retry: 1000\n\n").await?;
+    let (mut reader, mut writer) = stream.into_split();
+
+    let mut interval = tokio::time::interval(REMOTE_STREAM_INTERVAL);
+    interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
+    let mut last_revision = String::new();
+    let mut last_write = Instant::now();
+    let mut tick_count = 0_u8;
+
+    let mut disconnect_probe = [0_u8; 1];
+    loop {
+        tokio::select! {
+            read = reader.read(&mut disconnect_probe) => {
+                match read {
+                    Ok(0) | Err(_) => break,
+                    Ok(_) => continue,
+                }
+            }
+            _ = interval.tick() => {}
+        }
+        tick_count = tick_count.wrapping_add(1);
+        if tick_count % 4 == 1 {
+            let settings = load_settings();
+            if !settings.remote_access_enabled
+                || settings.remote_access_token != access_token
+                || listener_key(&settings) != stream_key
+            {
+                break;
+            }
+        }
+
+        let session = match find_session(&state, &session_id) {
+            Some(session) => session,
+            None => {
+                let frame = sse_frame("error", r#"{"error":"Session no longer exists"}"#);
+                let _ = write_stream_chunk(&mut writer, frame.as_bytes()).await;
+                break;
+            }
+        };
+        let target = match session.tmux_target.as_deref() {
+            Some(target) => target.to_string(),
+            None => break,
+        };
+        let capture = match tokio::task::spawn_blocking(move || capture_pane(&target)).await {
+            Ok(Ok(capture)) => capture,
+            Ok(Err(error)) => {
+                let data = serde_json::to_string(&serde_json::json!({ "error": error }))
+                    .map_err(|error| error.to_string())?;
+                let frame = sse_frame("error", &data);
+                let _ = write_stream_chunk(&mut writer, frame.as_bytes()).await;
+                break;
+            }
+            Err(error) => return Err(error.to_string()),
+        };
+
+        if capture.revision == last_revision {
+            if last_write.elapsed() >= Duration::from_secs(15) {
+                write_stream_chunk(&mut writer, b": keepalive\n\n").await?;
+                last_write = Instant::now();
+            }
+            continue;
+        }
+
+        let revision = capture.revision.clone();
+        let payload = PaneCapture {
+            session_id: session.id,
+            project_name: session.project_name,
+            output: None,
+            styled_lines: capture.styled_lines,
+            revision,
+            captured_at: Utc::now().to_rfc3339(),
+        };
+        let data = serde_json::to_string(&payload).map_err(|error| error.to_string())?;
+        let frame = sse_frame("pane", &data);
+        if frame.len() > MAX_STREAM_FRAME_BYTES {
+            let error = sse_frame(
+                "error",
+                r#"{"error":"Pane is too large for Live mode. Switch to Saver."}"#,
+            );
+            let _ = write_stream_chunk(&mut writer, error.as_bytes()).await;
+            break;
+        }
+        write_stream_chunk(&mut writer, frame.as_bytes()).await?;
+        last_revision = capture.revision;
+        last_write = Instant::now();
+    }
+
+    let _ = write_raw_stream(&mut writer, b"0\r\n\r\n").await;
+    Ok(())
+}
+
+fn sse_frame(event: &str, data: &str) -> String {
+    format!("event: {event}\ndata: {data}\n\n")
+}
+
+async fn write_stream_chunk<W>(stream: &mut W, bytes: &[u8]) -> Result<(), String>
+where
+    W: AsyncWrite + Unpin,
+{
+    let mut chunk = format!("{:x}\r\n", bytes.len()).into_bytes();
+    chunk.extend_from_slice(bytes);
+    chunk.extend_from_slice(b"\r\n");
+    write_raw_stream(stream, &chunk).await
+}
+
+async fn write_raw_stream<W>(stream: &mut W, bytes: &[u8]) -> Result<(), String>
+where
+    W: AsyncWrite + Unpin,
+{
+    tokio::time::timeout(Duration::from_secs(5), stream.write_all(bytes))
+        .await
+        .map_err(|_| "Remote stream write timed out".to_string())?
+        .map_err(|error| error.to_string())
 }
 
 fn find_session(state: &Arc<AppState>, session_id: &str) -> Option<C3Session> {
@@ -639,6 +815,7 @@ async fn write_response(
         404 => "Not Found",
         409 => "Conflict",
         413 => "Payload Too Large",
+        429 => "Too Many Requests",
         502 => "Bad Gateway",
         503 => "Service Unavailable",
         _ => "Error",
@@ -647,15 +824,14 @@ async fn write_response(
         "HTTP/1.1 {status} {reason}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nCache-Control: no-store\r\nX-Content-Type-Options: nosniff\r\nContent-Security-Policy: default-src 'self'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src 'self'; connect-src 'self'; base-uri 'none'; frame-ancestors 'none'\r\nReferrer-Policy: no-referrer\r\nConnection: close\r\n\r\n",
         body.len()
     );
-    stream
-        .write_all(headers.as_bytes())
-        .await
-        .map_err(|error| error.to_string())?;
-    stream
-        .write_all(body)
-        .await
-        .map_err(|error| error.to_string())?;
-    stream.shutdown().await.map_err(|error| error.to_string())
+    tokio::time::timeout(Duration::from_secs(5), async {
+        stream.write_all(headers.as_bytes()).await?;
+        stream.write_all(body).await?;
+        stream.shutdown().await
+    })
+    .await
+    .map_err(|_| "HTTP response write timed out".to_string())?
+    .map_err(|error| error.to_string())
 }
 
 #[cfg(test)]
@@ -709,6 +885,29 @@ mod tests {
         let token = generate_access_token();
         assert_eq!(token.len(), 64);
         assert!(token.chars().all(|character| character.is_ascii_hexdigit()));
+    }
+
+    #[test]
+    fn sse_frames_are_single_complete_events() {
+        assert_eq!(
+            sse_frame("pane", r#"{"revision":"abc","text":"one\ntwo"}"#),
+            "event: pane\ndata: {\"revision\":\"abc\",\"text\":\"one\\ntwo\"}\n\n"
+        );
+    }
+
+    #[test]
+    fn stream_payload_omits_plain_text_fallback() {
+        let payload = PaneCapture {
+            session_id: "tmux:0:1.0".to_string(),
+            project_name: "test".to_string(),
+            output: None,
+            styled_lines: Vec::new(),
+            revision: "abc".to_string(),
+            captured_at: "now".to_string(),
+        };
+        let json = serde_json::to_string(&payload).unwrap();
+        assert!(!json.contains("\"output\""));
+        assert!(json.contains("\"revision\":\"abc\""));
     }
 
     #[tokio::test]

@@ -89,6 +89,15 @@ Returns up to 200 recent lines from the session’s tmux pane:
 }
 ```
 
+### `GET /api/stream?sessionId=<id>`
+
+Returns an authenticated Server-Sent Events stream for one open pane. The server samples tmux every 250 ms and emits a `pane` event only when the content-derived revision changes. Stream events contain styled lines and omit the duplicate plain-text fallback. Browsers use an authenticated `fetch()` stream; iOS uses `URLSessionDataDelegate`.
+
+```text
+event: pane
+data: {"sessionId":"tmux:0:22.0","styledLines":[…],"revision":"…"}
+```
+
 ### `POST /api/input`
 
 ```json
@@ -108,15 +117,28 @@ C3 writes the text through a temporary tmux buffer and sends Enter only when `su
 - `0.0.0.0`, LAN addresses, and public addresses are rejected.
 - A random UUID token is required for every API request.
 - The browser receives the token in the URL fragment, which is not sent in HTTP requests or server logs; it stores the token locally and removes the fragment from visible history.
+- Live streams are revoked when remote access is disabled, rebound, or its token rotates; at most four streams may run concurrently.
 - The static client contains no session data and may load without authentication.
 - The API exposes session summaries, pane capture, and text submission only—no arbitrary command endpoint.
 - Tailscale supplies encrypted transport and device/network authorization. Plain HTTP must not be used outside Tailscale.
 
+## Why C3 does not use `tmux pipe-pane`
+
+`pipe-pane -O` can forward new pane bytes immediately, but it is not a copy of the rendered tmux screen:
+
+- A pane has only one output pipe, so C3 could replace a user's existing logger or automation and cannot reliably restore its command.
+- The pipe starts with future output only; it does not provide the current screen needed when a phone opens a session.
+- It emits the raw terminal byte stream—cursor movement, alternate-screen operations, erases, and partial frames. Reproducing that stream correctly would require a full terminal emulator in both the browser and SwiftUI client.
+- Control mode avoids the one-pipe conflict but still sends raw pane output and therefore has the same terminal-emulation requirement.
+
+C3 instead samples tmux's already-rendered pane, preserves safe ANSI styling, and streams only changed revisions. This keeps tmux authoritative, avoids modifying panes, and measured under 1% C3 CPU with two live clients. If process-launch overhead becomes material later, the next optimization is a persistent tmux control connection for capture commands or line-level capture diffs—not taking ownership of `pipe-pane`.
+
 ## Reliability
 
-- Clients poll session summaries every 3 seconds and the open pane every 1.5 seconds.
-- Capture revisions let clients skip rebuilding the terminal view when the pane is unchanged.
-- Loss of connection preserves the last readable state and shows a direct reconnect message.
+- Clients poll session summaries every 3 seconds.
+- An open pane defaults to a bounded 250 ms SSE stream that sends only changed revisions. **Saver** mode uses the prior 1.5-second snapshot polling path.
+- Capture revisions prevent unchanged streams from rebuilding the terminal view.
+- Stream failures preserve the last readable pane, fall back to snapshot polling, and reconnect with bounded backoff.
 - Server configuration changes restart only the remote listener, not C3 or tmux scanning.
 - Sending input resolves the session ID against C3’s current in-memory map immediately before writing.
 
@@ -131,4 +153,5 @@ C3 writes the text through a temporary tmux buffer and sends Enter only when `su
 - Session search filters by title, project, agent kind, and pending-action text.
 - Native portrait and landscape layouts preserve the two-column ceiling.
 - The iOS app accepts the same pairing URL and completes the same read/respond workflow.
+- Live mode refreshes an active pane several times per second; Saver mode remains selectable on web and iOS.
 - Existing local hooks on `127.0.0.1:9398` continue unchanged.

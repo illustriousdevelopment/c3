@@ -72,6 +72,13 @@ final class RemoteStore: ObservableObject {
         return try await RemoteAPI(configuration: configuration).capture(sessionID: sessionID)
     }
 
+    func captureStream(sessionID: String) throws -> AsyncThrowingStream<PaneCapture, Error> {
+        guard let configuration else {
+            throw RemoteAPIError.message("C3 Remote is not paired.")
+        }
+        return RemoteAPI(configuration: configuration).captureStream(sessionID: sessionID)
+    }
+
     func send(sessionID: String, text: String) async throws {
         guard let configuration else {
             throw RemoteAPIError.message("C3 Remote is not paired.")

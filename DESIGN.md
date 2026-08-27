@@ -120,6 +120,12 @@ components:
     rounded: "{rounded.brand-mark}"
     height: "44px"
     padding: "9px 12px 9px 38px"
+  remote-live-button:
+    backgroundColor: "{colors.remote-panel}"
+    textColor: "{colors.remote-green}"
+    rounded: "{rounded.touch-control}"
+    height: "44px"
+    padding: "0 10px"
   remote-session-card:
     backgroundColor: "{colors.remote-panel}"
     textColor: "{colors.remote-text}"
@@ -265,6 +271,9 @@ A sticky graphite bar with a 58px minimum height plus top safe-area inset. It pa
 ### Remote Search Field
 A full-width 44px native-feeling search field sits between agent count and cards. It filters session title, project, agent kind, and pending-action text without changing attention ordering. Web uses a 7px graphite field with a leading search icon; iOS uses the system searchable navigation drawer.
 
+### Remote Live Mode
+A compact 44px mode control sits beside pane refresh. Green **Live** means low-latency server events are active; muted **Saver** means 1.5-second snapshot polling. The mode changes transport cadence, not terminal content or input behavior, and stops when detail closes.
+
 ### Remote Session Card
 The signature attention tile: minimum 174px high, 15px × 15px × 13px padding, a visible 1px line, 3px corners, and a small structural shadow. Reading order is name, task context, strong state label, attention text, then agent kind. The 9px state light is redundant with a text label, never the only state cue.
 
@@ -275,7 +284,7 @@ A detail-only multiline field with a 48px minimum height, 12px × 13px padding, 
 A 48px-high blue action with 9px corners and dark ink. Disabled state becomes muted graphite. Native adapts the action to a circular 44px control with a bold upward arrow and an explicit accessibility label.
 
 ### Remote Terminal Pane
-A flexible black pane with 14px padding, a 1px graphite border, 4px corners, selectable monospaced text, preserved whitespace, and anywhere wrapping. Safe ANSI foreground/background colors, bold, dim, italic, and underline styling recreate terminal hierarchy without embedding a full terminal emulator. Capture revisions prevent unchanged panes from rebuilding. It remains a viewer, not a general shell.
+A flexible black pane with 14px padding, a 1px graphite border, 4px corners, selectable monospaced text, preserved whitespace, and anywhere wrapping. Safe ANSI foreground/background colors, bold, dim, italic, and underline styling recreate terminal hierarchy without embedding a full terminal emulator. Live mode applies only changed SSE revisions; Saver mode and reconnect fallback preserve the last readable capture. It remains a viewer, not a general shell.
 
 ## Do's and Don'ts
 

@@ -140,10 +140,34 @@
       cursor: pointer;
     }
     .back-button:hover, .icon-button:hover { background: var(--panel); }
-    .detail-title { min-width: 0; }
+    .detail-title { min-width: 0; flex: 1; }
     .detail-title h1 { margin: 0; font-size: 18px; line-height: 1.2; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .detail-meta { margin-top: 3px; color: var(--muted); font-size: 12px; }
-    .detail-header .icon-button { margin-left: auto; }
+    .live-mode-button {
+      min-height: 44px;
+      padding: 0 10px;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: transparent;
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 700;
+      cursor: pointer;
+    }
+    .live-mode-button.active {
+      border-color: rgba(117, 210, 154, .48);
+      color: var(--green);
+      background: rgba(117, 210, 154, .08);
+    }
+    .live-mode-button.fallback {
+      border-color: rgba(255, 193, 7, .48);
+      color: var(--yellow);
+      background: rgba(255, 193, 7, .08);
+    }
+    .live-mode-dot { width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
     .terminal {
       flex: 1 1 auto;
       min-height: 0;
@@ -278,6 +302,10 @@
             <h1 id="detail-name">Session</h1>
             <div id="detail-meta" class="detail-meta"></div>
           </div>
+          <button id="live-button" class="live-mode-button fallback" type="button" aria-pressed="true" aria-label="Live updates" aria-description="Polling while the live stream connects">
+            <span class="live-mode-dot" aria-hidden="true"></span>
+            <span id="live-button-label">Live</span>
+          </button>
           <button id="refresh-button" class="icon-button" type="button" aria-label="Refresh pane">
             <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 11a8.1 8.1 0 0 0-15.5-2M4 4v5h5"/><path d="M4 13a8.1 8.1 0 0 0 15.5 2M20 20v-5h-5"/></svg>
           </button>
@@ -304,6 +332,11 @@
         returnFocusSessionId: null,
         paneRevision: '',
         paneRequestSerial: 0,
+        liveStreaming: true,
+        streamActive: false,
+        streamAbort: null,
+        streamRetryTimer: null,
+        streamFailures: 0,
         boardTimer: null,
         paneTimer: null,
       };
@@ -313,6 +346,8 @@
         spawning: 'STARTING', complete: 'IDLE', error: 'ERROR'
       })[value] || value.toUpperCase();
       const escapeHtml = (value) => String(value ?? '').replace(/[&<>'"]/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' })[char]);
+
+      const maximumStreamEventCharacters = 8 * 1024 * 1024;
 
       function extractToken(value) {
         try {
@@ -334,16 +369,23 @@
         $('app').hidden = !state.token;
       }
 
+      function rejectPairing() {
+        localStorage.removeItem('c3.remote.token');
+        state.token = '';
+        state.liveStreaming = false;
+        stopPaneUpdates();
+        $('app').hidden = true;
+        $('pairing').hidden = false;
+        $('pairing-error').textContent = 'Pairing expired. Paste a fresh C3 pairing link.';
+      }
+
       async function api(path, options = {}) {
         const headers = new Headers(options.headers || {});
         headers.set('Authorization', `Bearer ${state.token}`);
         if (options.body) headers.set('Content-Type', 'application/json');
         const response = await fetch(path, { ...options, headers, cache: 'no-store' });
         if (response.status === 401) {
-          localStorage.removeItem('c3.remote.token');
-          state.token = '';
-          $('app').hidden = true;
-          $('pairing').hidden = false;
+          rejectPairing();
           throw new Error('The access token was rejected. Paste a fresh pairing link.');
         }
         const payload = await response.json().catch(() => ({}));
@@ -352,7 +394,11 @@
       }
 
       function setConnection(kind, label) {
-        $('connection').className = `connection ${kind}`;
+        const className = `connection ${kind}`;
+        if ($('connection').className === className && $('connection-label').textContent === label) {
+          return;
+        }
+        $('connection').className = className;
         $('connection-label').textContent = label;
       }
 
@@ -419,10 +465,10 @@
             state.boardFingerprint = fingerprint;
             renderBoard();
           }
-          setConnection('online', 'Connected');
+          if (!state.selectedId) setConnection('online', 'Connected');
           $('updated').textContent = 'now';
         } catch (error) {
-          setConnection('offline', 'Offline');
+          if (!state.selectedId) setConnection('offline', 'Offline');
           $('updated').textContent = '';
           if (!state.sessions.length && state.token) {
             $('session-grid').innerHTML = `<div class="error-panel"><strong>Could not reach C3</strong>${escapeHtml(error.message)}</div>`;
@@ -460,29 +506,158 @@
         terminal.replaceChildren(fragment);
       }
 
+      function applyPaneCapture(capture, transport = 'poll') {
+        if (!state.selectedId || capture.sessionId !== state.selectedId) return false;
+        if (transport === 'stream' && !state.streamActive) {
+          state.paneRequestSerial += 1;
+          state.streamActive = true;
+          state.streamFailures = 0;
+          updateLiveButton();
+        }
+        setConnection('online', 'Connected');
+        if (capture.revision === state.paneRevision) return false;
+        const terminal = $('terminal');
+        const nearBottom = terminal.scrollHeight - terminal.scrollTop - terminal.clientHeight < 80;
+        state.paneRevision = capture.revision || '';
+        renderStyledCapture(terminal, capture);
+        terminal.classList.remove('loading');
+        if (nearBottom) terminal.scrollTop = terminal.scrollHeight;
+        return true;
+      }
+
       async function refreshPane() {
         const requestedSessionId = state.selectedId;
         if (!requestedSessionId) return;
         const requestSerial = ++state.paneRequestSerial;
-        const terminal = $('terminal');
         try {
           const capture = await api(`/api/capture?sessionId=${encodeURIComponent(requestedSessionId)}`);
           if (state.selectedId !== requestedSessionId || requestSerial !== state.paneRequestSerial) return;
-          if (capture.revision === state.paneRevision) {
-            setConnection('online', 'Connected');
-            return;
-          }
-          const nearBottom = terminal.scrollHeight - terminal.scrollTop - terminal.clientHeight < 80;
-          state.paneRevision = capture.revision || '';
-          renderStyledCapture(terminal, capture);
-          terminal.classList.remove('loading');
-          if (nearBottom) terminal.scrollTop = terminal.scrollHeight;
-          setConnection('online', 'Connected');
+          applyPaneCapture(capture, 'poll');
         } catch (error) {
           if (state.selectedId !== requestedSessionId || requestSerial !== state.paneRequestSerial) return;
-          terminal.textContent = `Could not load pane.\n\n${error.message}`;
-          terminal.classList.remove('loading');
+          if (!state.paneRevision) {
+            $('terminal').textContent = `Could not load pane.\n\n${error.message}`;
+            $('terminal').classList.remove('loading');
+          }
           setConnection('offline', 'Offline');
+        }
+      }
+
+      function updateLiveButton() {
+        const actualMode = !state.liveStreaming
+          ? 'Saver'
+          : state.streamActive
+            ? 'Live'
+            : 'Fallback';
+        $('live-button').classList.toggle('active', actualMode === 'Live');
+        $('live-button').classList.toggle('fallback', actualMode === 'Fallback');
+        $('live-button').setAttribute('aria-label', 'Live updates');
+        $('live-button').setAttribute('aria-pressed', String(state.liveStreaming));
+        $('live-button').setAttribute(
+          'aria-description',
+          actualMode === 'Live'
+            ? 'Streaming changed pane frames'
+            : actualMode === 'Fallback'
+              ? 'Polling while the live stream reconnects'
+              : 'Battery saver polling every 1.5 seconds'
+        );
+        $('live-button-label').textContent = actualMode;
+        $('refresh-button').hidden = state.liveStreaming;
+      }
+
+      function stopPaneUpdates() {
+        state.paneRequestSerial += 1;
+        state.streamActive = false;
+        state.streamAbort?.abort();
+        state.streamAbort = null;
+        clearTimeout(state.streamRetryTimer);
+        state.streamRetryTimer = null;
+        clearInterval(state.paneTimer);
+        state.paneTimer = null;
+      }
+
+      function startSaverPolling() {
+        refreshPane();
+        state.paneTimer = setInterval(refreshPane, 1500);
+      }
+
+      async function startPaneStream() {
+        const sessionId = state.selectedId;
+        if (!sessionId || !state.liveStreaming) return;
+        const controller = new AbortController();
+        state.streamAbort = controller;
+        try {
+          const response = await fetch(`/api/stream?sessionId=${encodeURIComponent(sessionId)}`, {
+            headers: { Authorization: `Bearer ${state.token}` },
+            cache: 'no-store',
+            signal: controller.signal,
+          });
+          if (response.status === 401) {
+            rejectPairing();
+            return;
+          }
+          if (!response.ok || !response.body) {
+            const payload = await response.json().catch(() => ({}));
+            throw new Error(payload.error || `C3 stream returned ${response.status}`);
+          }
+
+          const reader = response.body.getReader();
+          const decoder = new TextDecoder();
+          let buffer = '';
+          while (state.selectedId === sessionId && state.liveStreaming) {
+            const { value, done } = await reader.read();
+            if (done) throw new Error('Live stream closed');
+            buffer += decoder.decode(value, { stream: true });
+            if (buffer.length > maximumStreamEventCharacters) {
+              throw new Error('Live pane frame exceeded 8 MiB');
+            }
+            let boundary;
+            while ((boundary = buffer.indexOf('\n\n')) >= 0) {
+              const block = buffer.slice(0, boundary);
+              buffer = buffer.slice(boundary + 2);
+              if (!block || block.startsWith(':')) continue;
+              let eventName = 'message';
+              let data = '';
+              block.split('\n').forEach((line) => {
+                if (line.startsWith('event:')) eventName = line.slice(6).trim();
+                if (line.startsWith('data:')) data += line.slice(5).trimStart();
+              });
+              if (eventName === 'pane' && data) {
+                applyPaneCapture(JSON.parse(data), 'stream');
+              } else if (eventName === 'error') {
+                const payload = JSON.parse(data || '{}');
+                throw new Error(payload.error || 'Live stream failed');
+              }
+            }
+          }
+        } catch (error) {
+          if (controller.signal.aborted || !state.liveStreaming || state.selectedId !== sessionId) return;
+          state.streamFailures += 1;
+          state.streamActive = false;
+          updateLiveButton();
+          setConnection('offline', 'Reconnecting');
+          startSaverPolling();
+          const delay = Math.min(5000, 750 * (2 ** Math.min(state.streamFailures, 3)));
+          state.streamRetryTimer = setTimeout(() => {
+            clearInterval(state.paneTimer);
+            state.paneTimer = null;
+            state.paneRequestSerial += 1;
+            startPaneStream();
+          }, delay);
+        } finally {
+          if (state.streamAbort === controller) state.streamAbort = null;
+        }
+      }
+
+      function restartPaneUpdates() {
+        stopPaneUpdates();
+        if (!state.selectedId) return;
+        updateLiveButton();
+        if (state.liveStreaming) {
+          startPaneStream();
+        } else {
+          startSaverPolling();
+          setConnection('online', 'Connected');
         }
       }
 
@@ -492,33 +667,30 @@
         state.returnFocusSessionId = id;
         state.selectedId = id;
         state.paneRevision = '';
-        state.paneRequestSerial += 1;
         $('board').hidden = true;
         $('detail').hidden = false;
         $('detail-name').textContent = displayName(session);
         $('detail-meta').textContent = `${session.agentKind || 'agent'} · ${stateLabel(session.state)}`;
-        $('terminal').textContent = 'Loading pane…';
+        $('terminal').textContent = 'Connecting to live pane…';
         $('terminal').classList.add('loading');
         $('response').value = '';
         $('send-button').disabled = true;
         $('send-status').textContent = '';
         window.scrollTo({ top: 0, behavior: 'instant' });
         history.pushState({ sessionId: id }, '', `#session=${encodeURIComponent(id)}`);
-        clearInterval(state.paneTimer);
-        refreshPane();
-        state.paneTimer = setInterval(refreshPane, 1500);
+        restartPaneUpdates();
         $('detail').focus({ preventScroll: true });
       }
 
       function closeDetail(updateHistory = true) {
         const returnFocusSessionId = state.returnFocusSessionId;
+        stopPaneUpdates();
         state.selectedId = null;
         state.returnFocusSessionId = null;
         state.paneRevision = '';
-        state.paneRequestSerial += 1;
-        clearInterval(state.paneTimer);
         $('detail').hidden = true;
         $('board').hidden = false;
+        setConnection('online', 'Connected');
         if (updateHistory) history.pushState({}, '', window.location.pathname);
         const card = returnFocusSessionId
           ? document.querySelector(`[data-session-id="${CSS.escape(returnFocusSessionId)}"]`)
@@ -540,6 +712,11 @@
       });
       $('back-button').addEventListener('click', () => closeDetail());
       $('refresh-button').addEventListener('click', refreshPane);
+      $('live-button').addEventListener('click', () => {
+        state.liveStreaming = !state.liveStreaming;
+        state.streamFailures = 0;
+        restartPaneUpdates();
+      });
       $('session-search').addEventListener('input', (event) => {
         state.searchQuery = event.target.value;
         renderBoard();
@@ -557,7 +734,7 @@
           $('response').value = '';
           $('send-status').textContent = 'Sent';
           setTimeout(() => { if ($('send-status').textContent === 'Sent') $('send-status').textContent = ''; }, 1800);
-          setTimeout(refreshPane, 350);
+          if (!state.liveStreaming) setTimeout(refreshPane, 350);
         } catch (error) {
           $('send-status').className = 'send-status error';
           $('send-status').textContent = error.message;
@@ -565,7 +742,9 @@
         }
       });
       window.addEventListener('popstate', (event) => { if (!event.state?.sessionId && state.selectedId) closeDetail(false); });
+      window.addEventListener('beforeunload', stopPaneUpdates);
 
+      updateLiveButton();
       bootstrapToken();
       if (state.token) {
         refreshBoard();
