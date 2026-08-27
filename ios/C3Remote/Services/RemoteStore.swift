@@ -4,6 +4,8 @@ import Foundation
 final class RemoteStore: ObservableObject {
     @Published private(set) var configuration: PairingConfiguration?
     @Published private(set) var sessions: [RemoteSession] = []
+    @Published private(set) var sessionMeta: [String: RemoteSessionMeta] = [:]
+    @Published private(set) var groups: [RemoteSessionGroup] = []
     @Published private(set) var isConnected = false
     @Published private(set) var isRefreshing = false
     @Published var errorMessage: String?
@@ -33,12 +35,14 @@ final class RemoteStore: ObservableObject {
         }
     }
 
-    func connect(pairingLink: String) async -> Bool {
+    func connect(pairingLink: String, persist: Bool = true) async -> Bool {
         do {
             let configuration = try PairingConfiguration.parse(pairingLink)
             let api = RemoteAPI(configuration: configuration)
             _ = try await api.health()
-            try PairingStore.save(configuration)
+            if persist {
+                try PairingStore.save(configuration)
+            }
             self.configuration = configuration
             isConnected = true
             errorMessage = nil
@@ -56,7 +60,10 @@ final class RemoteStore: ObservableObject {
         isRefreshing = true
         defer { isRefreshing = false }
         do {
-            sessions = try await RemoteAPI(configuration: configuration).sessions()
+            let dashboard = try await RemoteAPI(configuration: configuration).dashboard()
+            sessions = dashboard.sessions
+            sessionMeta = dashboard.sessionMeta.sessions
+            groups = dashboard.sessionMeta.groups
             isConnected = true
             errorMessage = nil
         } catch {
@@ -86,6 +93,28 @@ final class RemoteStore: ObservableObject {
         try await RemoteAPI(configuration: configuration).send(sessionID: sessionID, text: text)
     }
 
+    func projects() async throws -> [RemoteProject] {
+        guard let configuration else {
+            throw RemoteAPIError.message("C3 Remote is not paired.")
+        }
+        return try await RemoteAPI(configuration: configuration).projects()
+    }
+
+    func launch(
+        agentKind: String,
+        projectPath: String,
+        prompt: String?
+    ) async throws -> RemoteLaunchResult {
+        guard let configuration else {
+            throw RemoteAPIError.message("C3 Remote is not paired.")
+        }
+        return try await RemoteAPI(configuration: configuration).launch(
+            agentKind: agentKind,
+            projectPath: projectPath,
+            prompt: prompt
+        )
+    }
+
     func disconnect() {
         do {
             try PairingStore.remove()
@@ -95,6 +124,8 @@ final class RemoteStore: ObservableObject {
         }
         configuration = nil
         sessions = []
+        sessionMeta = [:]
+        groups = []
         isConnected = false
         errorMessage = nil
     }

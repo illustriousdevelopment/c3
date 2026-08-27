@@ -55,6 +55,30 @@ struct RemoteAPI {
         try await request(path: "/api/sessions")
     }
 
+    func dashboard() async throws -> RemoteDashboard {
+        try await request(path: "/api/dashboard")
+    }
+
+    func projects() async throws -> [RemoteProject] {
+        try await request(path: "/api/projects")
+    }
+
+    func launch(
+        agentKind: String,
+        projectPath: String,
+        prompt: String?
+    ) async throws -> RemoteLaunchResult {
+        struct Payload: Encodable {
+            let agentKind: String
+            let projectPath: String
+            let prompt: String?
+        }
+        let body = try JSONEncoder().encode(
+            Payload(agentKind: agentKind, projectPath: projectPath, prompt: prompt)
+        )
+        return try await request(path: "/api/launch", method: "POST", body: body)
+    }
+
     func capture(sessionID: String) async throws -> PaneCapture {
         var components = URLComponents()
         components.path = "/api/capture"

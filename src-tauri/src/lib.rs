@@ -101,6 +101,8 @@ pub struct AppSettings {
     pub remote_port: u16,
     #[serde(default)]
     pub remote_access_token: String,
+    #[serde(default = "default_remote_project_roots")]
+    pub remote_project_roots: Vec<String>,
 }
 
 fn default_terminal() -> String {
@@ -123,6 +125,13 @@ fn default_remote_port() -> u16 {
     9399
 }
 
+fn default_remote_project_roots() -> Vec<String> {
+    ["~/code", "~/projects", "~/repositories"]
+        .into_iter()
+        .map(str::to_string)
+        .collect()
+}
+
 impl Default for AppSettings {
     fn default() -> Self {
         Self {
@@ -139,6 +148,7 @@ impl Default for AppSettings {
             remote_bind_address: default_remote_bind_address(),
             remote_port: default_remote_port(),
             remote_access_token: String::new(),
+            remote_project_roots: default_remote_project_roots(),
         }
     }
 }
@@ -840,64 +850,125 @@ fn assign_session_group(
     Ok(store)
 }
 
-// Tauri command: Create new tmux task
-#[tauri::command]
-async fn create_new_task() -> Result<String, String> {
-    // Find the first attached tmux session to create the window in
-    let list_output = cmd("tmux")
+fn preferred_tmux_session() -> Result<Option<String>, String> {
+    let output = cmd("tmux")
         .args(["list-sessions", "-F", "#{session_name}:#{session_attached}"])
         .output()
-        .map_err(|e| format!("Failed to list tmux sessions: {}", e))?;
-
-    let stdout = String::from_utf8_lossy(&list_output.stdout);
-    let session_name = stdout
-        .lines()
-        .find(|l| l.ends_with(":1")) // attached session
-        .and_then(|l| l.split(':').next())
-        .unwrap_or("0")
-        .to_string();
-
-    // Create a new window in the attached session, starting in the user's home directory.
-    // Trailing colon means "this session, auto-assign window index" — without it,
-    // tmux interprets the bare name as a window index and fails with "index in use".
-    let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
-    let target_session = format!("{}:", session_name);
-    let create_window = cmd("tmux")
-        .args([
-            "new-window",
-            "-t",
-            &target_session,
-            "-c",
-            &home,
-            "-P",
-            "-F",
-            "#{session_name}:#{window_index}.#{pane_index}",
-        ])
-        .output()
-        .map_err(|e| format!("Failed to create window: {}", e))?;
-
-    if !create_window.status.success() {
-        let stderr = String::from_utf8_lossy(&create_window.stderr);
-        return Err(format!("Failed to create window: {}", stderr));
+        .map_err(|error| format!("Failed to list tmux sessions: {error}"))?;
+    if !output.status.success() {
+        return Ok(None);
     }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let attached = stdout
+        .lines()
+        .find_map(|line| line.strip_suffix(":1").map(str::to_string));
+    Ok(attached.or_else(|| {
+        stdout
+            .lines()
+            .next()
+            .and_then(|line| line.rsplit_once(':').map(|(name, _)| name.to_string()))
+    }))
+}
 
-    let target = String::from_utf8_lossy(&create_window.stdout)
-        .trim()
-        .to_string();
-
-    let settings = load_settings();
-    let agent_command = match settings.default_agent.as_str() {
+pub(crate) fn agent_launch_command(
+    agent_kind: &str,
+    prompt: Option<&str>,
+) -> Result<(&'static str, String), String> {
+    let agent_command = match agent_kind {
         "claude" => "claude",
         "codex" => "codex",
-        _ => "codex",
+        "omp" => "omp",
+        _ => return Err("Agent must be claude, codex, or omp.".to_string()),
     };
+    let mut command_line = agent_command.to_string();
+    if let Some(prompt) = prompt.map(str::trim).filter(|prompt| !prompt.is_empty()) {
+        if prompt.len() > 16 * 1024 {
+            return Err("Initial prompt exceeds 16 KiB.".to_string());
+        }
+        if prompt
+            .chars()
+            .any(|character| character.is_control() && character != '\n' && character != '\t')
+        {
+            return Err("Initial prompt contains unsupported control characters.".to_string());
+        }
+        let positional_prompt = format!("Task:\n{prompt}");
+        command_line.push(' ');
+        command_line.push_str(&shell_quote(&positional_prompt));
+    }
+    command_line.push_str("; exec \"$SHELL\" -l");
+    Ok((agent_command, command_line))
+}
 
-    // Start the configured agent in the new window
-    let _ = cmd("tmux")
-        .args(["send-keys", "-t", &target, agent_command, "Enter"])
-        .output();
+pub(crate) fn launch_agent_in_tmux(
+    agent_kind: &str,
+    project_path: &std::path::Path,
+    prompt: Option<&str>,
+) -> Result<String, String> {
+    let (agent_command, command_line) = agent_launch_command(agent_kind, prompt)?;
+    if !cmd("which")
+        .arg(agent_command)
+        .output()
+        .map(|output| output.status.success())
+        .unwrap_or(false)
+    {
+        return Err(format!(
+            "{agent_command} is not installed or not available in C3's PATH."
+        ));
+    }
+    let project_path = fs::canonicalize(project_path)
+        .map_err(|error| format!("Project directory is unavailable: {error}"))?;
+    if !project_path.is_dir() {
+        return Err("Project path must be a directory.".to_string());
+    }
+    let project_path_string = project_path.to_string_lossy().to_string();
 
-    Ok(target)
+    let create = if let Some(session_name) = preferred_tmux_session()? {
+        let target_session = format!("{session_name}:");
+        cmd("tmux")
+            .args([
+                "new-window",
+                "-t",
+                &target_session,
+                "-c",
+                &project_path_string,
+                "-P",
+                "-F",
+                "#{session_name}:#{window_index}.#{pane_index}",
+            ])
+            .arg(&command_line)
+            .output()
+    } else {
+        cmd("tmux")
+            .args([
+                "new-session",
+                "-d",
+                "-s",
+                "c3",
+                "-c",
+                &project_path_string,
+                "-P",
+                "-F",
+                "#{session_name}:#{window_index}.#{pane_index}",
+            ])
+            .arg(&command_line)
+            .output()
+    }
+    .map_err(|error| format!("Failed to create tmux window: {error}"))?;
+    if !create.status.success() {
+        return Err(format!(
+            "Failed to create tmux window: {}",
+            String::from_utf8_lossy(&create.stderr).trim()
+        ));
+    }
+    Ok(String::from_utf8_lossy(&create.stdout).trim().to_string())
+}
+
+// Tauri command: Create a new tmux task with the configured default agent.
+#[tauri::command]
+async fn create_new_task() -> Result<String, String> {
+    let settings = load_settings();
+    let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
+    launch_agent_in_tmux(&settings.default_agent, std::path::Path::new(&home), None)
 }
 
 // Tauri command: Play sound (system or custom file)

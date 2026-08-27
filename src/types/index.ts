@@ -61,7 +61,7 @@ export interface SoundConfig {
 
 export interface AppSettings {
   terminal_app: string;
-  default_agent: 'claude' | 'codex';
+  default_agent: 'claude' | 'codex' | 'omp';
   notifications_enabled: boolean;
   permission_sound: SoundConfig;
   input_sound: SoundConfig;
@@ -70,6 +70,7 @@ export interface AppSettings {
   remote_bind_address: string;
   remote_port: number;
   remote_access_token: string;
+  remote_project_roots: string[];
 }
 
 export interface RemoteAccessInfo {

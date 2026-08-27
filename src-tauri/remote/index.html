@@ -69,6 +69,21 @@
     .connection-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--faint); }
     .connection.online .connection-dot { background: var(--green); }
     .connection.offline .connection-dot { background: var(--red); }
+    .topbar-new-agent {
+      min-height: 44px;
+      padding: 0 11px;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      border: 1px solid #4a5260;
+      border-radius: 8px;
+      background: transparent;
+      color: var(--text);
+      font-size: 12px;
+      font-weight: 750;
+      cursor: pointer;
+    }
+    .topbar-new-agent svg { color: var(--blue); }
 
     main { width: min(920px, 100%); margin: 0 auto; padding: 19px 14px calc(30px + var(--safe-bottom)); }
     .board-heading { display: flex; align-items: baseline; justify-content: space-between; margin: 0 0 15px; }
@@ -98,6 +113,26 @@
     }
     .session-search input::placeholder { color: var(--muted); }
     .session-search input:focus { border-color: var(--blue); outline: none; }
+    .view-switch {
+      margin-bottom: 13px;
+      padding: 3px;
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      border: 1px solid #4a5260;
+      border-radius: 8px;
+      background: #0d0f14;
+    }
+    .view-switch button {
+      min-height: 44px;
+      border: 0;
+      border-radius: 5px;
+      background: transparent;
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 720;
+      cursor: pointer;
+    }
+    .view-switch button.active { background: var(--panel-pressed); color: var(--text); }
     .session-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
     .session-card {
       position: relative;
@@ -123,6 +158,29 @@
     .state-label { margin: 0 0 6px; color: #9da5b1; font-size: 12px; font-weight: 780; letter-spacing: .065em; }
     .attention { margin: 0; color: var(--text); font-size: 15px; line-height: 1.32; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
     .agent-kind { margin-top: 13px; color: #8f98a5; font-size: 12px; text-transform: lowercase; }
+    .group-list { display: grid; gap: 22px; }
+    .group-section { min-width: 0; }
+    .group-heading {
+      min-height: 30px;
+      margin-bottom: 8px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      color: var(--text);
+      font-size: 14px;
+      font-weight: 760;
+    }
+    .group-color { width: 9px; height: 9px; border-radius: 50%; background: var(--faint); }
+    .group-count { margin-left: auto; color: var(--muted); font-size: 11px; font-weight: 550; }
+    .group-session-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+    .empty-group {
+      padding: 18px 12px;
+      border: 1px dashed #4a5260;
+      border-radius: 5px;
+      color: var(--muted);
+      font-size: 12px;
+      text-align: center;
+    }
 
     .empty, .error-panel { padding: 54px 24px; text-align: center; color: var(--muted); }
     .empty strong, .error-panel strong { display: block; margin-bottom: 7px; color: var(--text); font-size: 18px; }
@@ -239,14 +297,100 @@
     .pairing-error { min-height: 19px; margin-top: 10px; color: #ff9898; font-size: 13px; }
 
     @media (max-width: 360px) {
-      .session-grid { grid-template-columns: 1fr; }
+      .session-grid, .group-session-grid { grid-template-columns: 1fr; }
       main { padding-inline: 10px; }
     }
     @media (min-width: 700px) {
       main { padding: 25px 24px 40px; }
-      .session-grid { gap: 14px; }
+      .session-grid, .group-session-grid { gap: 14px; }
       .session-card { min-height: 190px; padding: 18px; }
     }
+    .launch-overlay {
+      position: fixed;
+      inset: 0;
+      z-index: 30;
+      display: grid;
+      align-items: end;
+      background: rgba(0, 0, 0, .68);
+    }
+    .launch-sheet {
+      width: min(620px, 100%);
+      max-height: min(88dvh, 760px);
+      margin: 0 auto;
+      padding: 18px 16px calc(18px + var(--safe-bottom));
+      overflow: auto;
+      border: 1px solid #4a5260;
+      border-bottom: 0;
+      border-radius: 14px 14px 0 0;
+      background: var(--bar);
+      box-shadow: 0 -12px 40px rgba(0, 0, 0, .45);
+    }
+    .launch-header { display: flex; align-items: center; gap: 12px; margin-bottom: 17px; }
+    .launch-header h2 { margin: 0; font-size: 20px; letter-spacing: -.02em; }
+    .launch-close { margin-left: auto; }
+    .launch-field { margin-top: 15px; }
+    .launch-field > label, .launch-field > span {
+      display: block;
+      margin-bottom: 7px;
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 650;
+    }
+    .agent-picker { display: grid; grid-template-columns: repeat(3, 1fr); gap: 7px; }
+    .agent-picker button {
+      min-height: 44px;
+      border: 1px solid #4a5260;
+      border-radius: 7px;
+      background: var(--panel);
+      color: var(--muted);
+      font-weight: 700;
+    }
+    .agent-picker button.active { border-color: var(--blue); color: var(--text); background: var(--panel-pressed); }
+    .launch-field input, .launch-field textarea {
+      width: 100%;
+      border: 1px solid #4a5260;
+      border-radius: 7px;
+      background: #11141a;
+      color: var(--text);
+    }
+    .launch-field input { min-height: 44px; padding: 0 11px; }
+    .launch-field textarea { min-height: 78px; padding: 10px 11px; resize: vertical; }
+    .project-list {
+      max-height: 260px;
+      margin-top: 7px;
+      overflow: auto;
+      border: 1px solid #363d48;
+      border-radius: 7px;
+    }
+    .project-option {
+      width: 100%;
+      min-height: 49px;
+      padding: 7px 10px;
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      text-align: left;
+      border: 0;
+      border-bottom: 1px solid #2c323c;
+      background: transparent;
+      color: var(--text);
+    }
+    .project-option:last-child { border-bottom: 0; }
+    .project-option.active { background: rgba(113, 183, 239, .12); }
+    .project-option strong, .project-option small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .project-option small { grid-column: 1; margin-top: 2px; color: var(--muted); font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 10px; }
+    .project-option em { grid-column: 2; grid-row: 1 / span 2; align-self: center; color: var(--green); font-size: 10px; font-style: normal; }
+    .launch-error { min-height: 18px; margin-top: 9px; color: #ff9898; font-size: 12px; }
+    .launch-submit {
+      width: 100%;
+      min-height: 48px;
+      margin-top: 13px;
+      border: 0;
+      border-radius: 8px;
+      background: var(--blue);
+      color: #07131c;
+      font-weight: 800;
+    }
+    .launch-submit:disabled { background: #47505c; color: #8c95a1; }
     @media (prefers-reduced-motion: reduce) {
       *, *::before, *::after { scroll-behavior: auto !important; transition: none !important; }
     }
@@ -277,6 +421,10 @@
       <div id="connection" class="connection" aria-live="polite">
         <span class="connection-dot"></span><span id="connection-label">Connecting</span>
       </div>
+      <button id="new-agent-button" class="topbar-new-agent" type="button">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
+        <span>New</span>
+      </button>
     </header>
 
     <main>
@@ -289,6 +437,10 @@
           <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
           <input id="session-search" type="search" autocomplete="off" autocapitalize="off" placeholder="Search agents" aria-label="Search agents">
         </label>
+        <div class="view-switch" role="group" aria-label="Session view">
+          <button id="attention-view-button" class="active" type="button" aria-pressed="true">Attention</button>
+          <button id="groups-view-button" type="button" aria-pressed="false">Groups</button>
+        </div>
         <div id="session-grid" class="session-grid"></div>
         <div id="board-empty" class="empty" hidden><strong>No agent panes</strong>C3 will add sessions when an agent starts in tmux.</div>
       </section>
@@ -320,12 +472,50 @@
     </main>
   </div>
 
+  <div id="launch-overlay" class="launch-overlay" role="dialog" aria-modal="true" aria-labelledby="launch-title" hidden>
+    <form id="launch-form" class="launch-sheet" aria-busy="false">
+      <div class="launch-header">
+        <h2 id="launch-title">Start an agent</h2>
+        <button id="launch-close" class="icon-button launch-close" type="button" aria-label="Close new agent">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg>
+        </button>
+      </div>
+      <div class="launch-field">
+        <span>Agent</span>
+        <div class="agent-picker" role="radiogroup" aria-label="Agent">
+          <button type="button" data-agent="omp" class="active" role="radio" aria-checked="true">OMP</button>
+          <button type="button" data-agent="claude" role="radio" aria-checked="false">Claude</button>
+          <button type="button" data-agent="codex" role="radio" aria-checked="false">Codex</button>
+        </div>
+      </div>
+      <div class="launch-field">
+        <label for="project-search">Project</label>
+        <input id="project-search" type="search" autocomplete="off" placeholder="Search configured projects">
+        <div id="project-list" class="project-list" role="group" aria-label="Projects" aria-busy="false"></div>
+      </div>
+      <div class="launch-field">
+        <label for="launch-prompt">Initial prompt <span class="updated">(optional)</span></label>
+        <textarea id="launch-prompt" maxlength="16384" placeholder="What should the agent work on?"></textarea>
+      </div>
+      <div id="launch-error" class="launch-error" role="alert"></div>
+      <button id="launch-submit" class="launch-submit" type="submit" disabled>Start agent</button>
+    </form>
+  </div>
+
   <script>
     (() => {
       const $ = (id) => document.getElementById(id);
       const state = {
         token: '',
         sessions: [],
+        sessionMeta: {},
+        groups: [],
+        boardMode: 'attention',
+        projects: [],
+        selectedProjectPath: '',
+        launchAgent: 'omp',
+        projectQuery: '',
+        launching: false,
         boardFingerprint: '',
         searchQuery: '',
         selectedId: null,
@@ -374,6 +564,7 @@
         state.token = '';
         state.liveStreaming = false;
         stopPaneUpdates();
+        closeLaunchSheet(true);
         $('app').hidden = true;
         $('pairing').hidden = false;
         $('pairing-error').textContent = 'Pairing expired. Paste a fresh C3 pairing link.';
@@ -412,29 +603,8 @@
         return parts.at(-1) || session.projectPath;
       }
 
-      function renderBoard() {
-        const focusedSessionId = document.activeElement?.dataset?.sessionId || null;
-        const query = state.searchQuery.trim().toLowerCase();
-        const allSessions = [...state.sessions].sort((a, b) => {
-          const priority = (attentionOrder[a.state] ?? 9) - (attentionOrder[b.state] ?? 9);
-          return priority || new Date(b.lastActivity) - new Date(a.lastActivity);
-        });
-        const sessions = query
-          ? allSessions.filter((session) => [
-              displayName(session),
-              session.projectPath,
-              session.agentKind,
-              session.pendingAction?.description,
-            ].some((value) => String(value || '').toLowerCase().includes(query)))
-          : allSessions;
-        $('agent-count').textContent = query
-          ? `${sessions.length} of ${allSessions.length} agents`
-          : `${sessions.length} ${sessions.length === 1 ? 'agent' : 'agents'}`;
-        $('board-empty').hidden = sessions.length > 0;
-        $('board-empty').innerHTML = state.sessions.length
-          ? '<strong>No matching agents</strong>Try another project, task, or agent name.'
-          : '<strong>No agent panes</strong>C3 will add sessions when an agent starts in tmux.';
-        $('session-grid').innerHTML = sessions.map((session) => `
+      function renderSessionCard(session) {
+        return `
           <button class="session-card" type="button" data-session-id="${escapeHtml(session.id)}">
             <span class="state-light ${escapeHtml(session.state)}" aria-hidden="true"></span>
             <h2 class="session-name">${escapeHtml(displayName(session))}</h2>
@@ -442,8 +612,88 @@
             <div class="state-label">${escapeHtml(stateLabel(session.state))}</div>
             <p class="attention">${escapeHtml(session.pendingAction?.description || (session.state === 'processing' ? 'Agent is working' : 'Review the latest pane output'))}</p>
             <div class="agent-kind">${escapeHtml(session.agentKind || 'agent')}</div>
-          </button>`).join('');
-        document.querySelectorAll('[data-session-id]').forEach((card) => card.addEventListener('click', () => openDetail(card.dataset.sessionId)));
+          </button>`;
+      }
+
+      function filteredSessions() {
+        const query = state.searchQuery.trim().toLowerCase();
+        const ordered = [...state.sessions].sort((a, b) => {
+          const priority = (attentionOrder[a.state] ?? 9) - (attentionOrder[b.state] ?? 9);
+          return priority || new Date(b.lastActivity) - new Date(a.lastActivity);
+        });
+        if (!query) return ordered;
+        return ordered.filter((session) => [
+          displayName(session),
+          session.projectPath,
+          session.agentKind,
+          session.pendingAction?.description,
+        ].some((value) => String(value || '').toLowerCase().includes(query)));
+      }
+
+      function renderGroupSection(id, name, color, sessions, hasQuery) {
+        const safeColor = /^#[0-9a-f]{6}$/i.test(color || '') ? color : 'var(--faint)';
+        const headingId = `group-heading-${id}`;
+        const content = sessions.length
+          ? `<div class="group-session-grid">${sessions.map(renderSessionCard).join('')}</div>`
+          : `<div class="empty-group">${hasQuery ? 'No matching agents' : 'No agents'}</div>`;
+        return `
+          <section class="group-section" aria-labelledby="${headingId}">
+            <h2 class="group-heading" id="${headingId}">
+              <span class="group-color" style="background:${safeColor}" aria-hidden="true"></span>
+              <span>${escapeHtml(name)}</span>
+              <span class="group-count">${sessions.length}</span>
+            </h2>
+            ${content}
+          </section>`;
+      }
+
+      function renderBoard() {
+        const focusedSessionId = document.activeElement?.dataset?.sessionId || null;
+        const sessions = filteredSessions();
+        const hasQuery = Boolean(state.searchQuery.trim());
+        $('agent-count').textContent = hasQuery
+          ? `${sessions.length} of ${state.sessions.length} agents`
+          : `${sessions.length} ${sessions.length === 1 ? 'agent' : 'agents'}`;
+        $('attention-view-button').classList.toggle('active', state.boardMode === 'attention');
+        $('groups-view-button').classList.toggle('active', state.boardMode === 'groups');
+        $('attention-view-button').setAttribute('aria-pressed', String(state.boardMode === 'attention'));
+        $('groups-view-button').setAttribute('aria-pressed', String(state.boardMode === 'groups'));
+
+        $('board-empty').hidden = sessions.length > 0;
+        $('board-empty').innerHTML = state.sessions.length
+          ? '<strong>No matching agents</strong>Try another project, task, or agent name.'
+          : '<strong>No agent panes</strong>C3 will add sessions when an agent starts in tmux.';
+
+        if (state.boardMode === 'attention') {
+          $('session-grid').className = 'session-grid';
+          $('session-grid').innerHTML = sessions.map(renderSessionCard).join('');
+        } else {
+          $('session-grid').className = 'group-list';
+          if (!sessions.length) {
+            $('session-grid').innerHTML = '';
+          } else {
+            const knownGroupIds = new Set(state.groups.map((group) => group.id));
+            const sections = state.groups.map((group, index) => {
+              const groupSessions = sessions.filter(
+                (session) => state.sessionMeta[session.id]?.groupId === group.id
+              );
+              if (hasQuery && !groupSessions.length) return '';
+              return renderGroupSection(`configured-${index}`, group.name, group.color, groupSessions, hasQuery);
+            }).filter(Boolean);
+            const ungrouped = sessions.filter((session) => {
+              const groupId = state.sessionMeta[session.id]?.groupId;
+              return !groupId || !knownGroupIds.has(groupId);
+            });
+            if (ungrouped.length || (!hasQuery && state.groups.length === 0)) {
+              sections.push(renderGroupSection('ungrouped', 'Ungrouped', '#737b88', ungrouped, hasQuery));
+            }
+            $('session-grid').innerHTML = sections.join('');
+          }
+        }
+
+        document.querySelectorAll('[data-session-id]').forEach((card) => {
+          card.addEventListener('click', () => openDetail(card.dataset.sessionId));
+        });
         if (focusedSessionId) {
           document.querySelector(`[data-session-id="${CSS.escape(focusedSessionId)}"]`)?.focus({ preventScroll: true });
         }
@@ -451,16 +701,11 @@
 
       async function refreshBoard() {
         try {
-          const sessions = await api('/api/sessions');
-          const fingerprint = JSON.stringify(sessions.map((session) => [
-            session.id,
-            session.projectName,
-            session.projectPath,
-            session.agentKind,
-            session.state,
-            session.pendingAction?.description,
-          ]));
-          state.sessions = sessions;
+          const dashboard = await api('/api/dashboard');
+          const fingerprint = JSON.stringify(dashboard);
+          state.sessions = dashboard.sessions || [];
+          state.sessionMeta = dashboard.sessionMeta?.sessions || {};
+          state.groups = dashboard.sessionMeta?.groups || [];
           if (fingerprint !== state.boardFingerprint) {
             state.boardFingerprint = fingerprint;
             renderBoard();
@@ -473,6 +718,124 @@
           if (!state.sessions.length && state.token) {
             $('session-grid').innerHTML = `<div class="error-panel"><strong>Could not reach C3</strong>${escapeHtml(error.message)}</div>`;
           }
+        }
+      }
+
+      function projectMatchesQuery(project) {
+        const query = state.projectQuery.trim().toLowerCase();
+        return !query || `${project.name}\n${project.path}`.toLowerCase().includes(query);
+      }
+
+      function renderProjects() {
+        const projects = state.projects.filter(projectMatchesQuery).slice(0, 100);
+        const selectedVisible = projects.some((project) => project.path === state.selectedProjectPath);
+        $('launch-submit').disabled = state.launching || !selectedVisible;
+        $('project-list').setAttribute('aria-busy', 'false');
+        $('project-list').innerHTML = projects.length
+          ? projects.map((project) => `
+              <button
+                class="project-option ${state.selectedProjectPath === project.path ? 'active' : ''}"
+                type="button"
+                aria-pressed="${state.selectedProjectPath === project.path}"
+                data-project-path="${escapeHtml(project.path)}"
+                ${state.launching ? 'disabled' : ''}
+              >
+                <strong>${escapeHtml(project.name)}</strong>
+                <small>${escapeHtml(project.path)}</small>
+                ${project.active ? '<em>active</em>' : ''}
+              </button>`).join('')
+          : '<div class="empty-group" role="status">No projects match this search.</div>';
+        document.querySelectorAll('[data-project-path]').forEach((button) => {
+          button.addEventListener('click', () => {
+            if (state.launching) return;
+            state.selectedProjectPath = button.dataset.projectPath;
+            renderProjects();
+          });
+        });
+      }
+
+      async function openLaunchSheet() {
+        if (state.launching) return;
+        $('launch-overlay').hidden = false;
+        $('app').inert = true;
+        $('launch-form').setAttribute('aria-busy', 'false');
+        $('launch-error').textContent = '';
+        $('launch-prompt').value = '';
+        $('project-search').value = '';
+        state.projectQuery = '';
+        state.projects = [];
+        state.selectedProjectPath = '';
+        $('launch-submit').disabled = true;
+        $('project-list').setAttribute('aria-busy', 'true');
+        $('project-list').innerHTML = '<div class="empty-group" role="status">Loading projects…</div>';
+        $('launch-close').focus();
+        try {
+          state.projects = await api('/api/projects');
+          state.selectedProjectPath = state.projects.find((project) => project.active)?.path
+            || state.projects[0]?.path
+            || '';
+          renderProjects();
+          $('project-search').focus();
+        } catch (error) {
+          $('launch-error').textContent = error.message;
+          $('project-list').setAttribute('aria-busy', 'false');
+          $('project-list').innerHTML = '<div class="empty-group" role="status">Could not load projects.</div>';
+        }
+      }
+
+      function closeLaunchSheet(force = false) {
+        if (state.launching && !force) return;
+        $('launch-overlay').hidden = true;
+        $('app').inert = false;
+        $('new-agent-button').focus({ preventScroll: true });
+      }
+
+      function setLaunchBusy(busy) {
+        state.launching = busy;
+        $('launch-form').setAttribute('aria-busy', String(busy));
+        $('launch-close').disabled = busy;
+        $('project-search').disabled = busy;
+        $('launch-prompt').disabled = busy;
+        document.querySelectorAll('[data-agent]').forEach((button) => { button.disabled = busy; });
+        renderProjects();
+      }
+
+      function selectLaunchAgent(agent) {
+        if (state.launching) return;
+        state.launchAgent = agent;
+        document.querySelectorAll('[data-agent]').forEach((button) => {
+          const selected = button.dataset.agent === agent;
+          button.classList.toggle('active', selected);
+          button.setAttribute('aria-checked', String(selected));
+        });
+      }
+
+      async function submitLaunch() {
+        const selectedVisible = state.projects.some(
+          (project) => project.path === state.selectedProjectPath && projectMatchesQuery(project)
+        );
+        if (!selectedVisible || state.launching) return;
+        setLaunchBusy(true);
+        $('launch-submit').textContent = 'Starting…';
+        $('launch-error').textContent = '';
+        try {
+          await api('/api/launch', {
+            method: 'POST',
+            body: JSON.stringify({
+              agentKind: state.launchAgent,
+              projectPath: state.selectedProjectPath,
+              prompt: $('launch-prompt').value.trim() || null,
+            }),
+          });
+          closeLaunchSheet(true);
+          $('updated').textContent = `Started ${state.launchAgent.toUpperCase()}`;
+          setTimeout(refreshBoard, 800);
+          setTimeout(refreshBoard, 3200);
+        } catch (error) {
+          $('launch-error').textContent = error.message;
+        } finally {
+          setLaunchBusy(false);
+          $('launch-submit').textContent = 'Start agent';
         }
       }
 
@@ -721,6 +1084,35 @@
         state.searchQuery = event.target.value;
         renderBoard();
       });
+      $('attention-view-button').addEventListener('click', () => {
+        state.boardMode = 'attention';
+        renderBoard();
+      });
+      $('groups-view-button').addEventListener('click', () => {
+        state.boardMode = 'groups';
+        renderBoard();
+      });
+      $('new-agent-button').addEventListener('click', openLaunchSheet);
+      $('launch-close').addEventListener('click', closeLaunchSheet);
+      $('launch-overlay').addEventListener('click', (event) => {
+        if (event.target === $('launch-overlay')) closeLaunchSheet();
+      });
+      document.querySelectorAll('[data-agent]').forEach((button) => {
+        button.addEventListener('click', () => selectLaunchAgent(button.dataset.agent));
+      });
+      $('project-search').addEventListener('input', (event) => {
+        state.projectQuery = event.target.value;
+        if (!state.projects.some(
+          (project) => project.path === state.selectedProjectPath && projectMatchesQuery(project)
+        )) {
+          state.selectedProjectPath = '';
+        }
+        renderProjects();
+      });
+      $('launch-form').addEventListener('submit', (event) => {
+        event.preventDefault();
+        submitLaunch();
+      });
       $('response').addEventListener('input', (event) => { $('send-button').disabled = !event.target.value.trim(); });
       $('composer').addEventListener('submit', async (event) => {
         event.preventDefault();
@@ -743,6 +1135,27 @@
       });
       window.addEventListener('popstate', (event) => { if (!event.state?.sessionId && state.selectedId) closeDetail(false); });
       window.addEventListener('beforeunload', stopPaneUpdates);
+      window.addEventListener('keydown', (event) => {
+        if ($('launch-overlay').hidden) return;
+        if (event.key === 'Escape') {
+          closeLaunchSheet();
+          return;
+        }
+        if (event.key !== 'Tab') return;
+        const focusable = [...$('launch-form').querySelectorAll(
+          'button:not([disabled]), input:not([disabled]), textarea:not([disabled])'
+        )].filter((element) => element.offsetParent !== null);
+        if (!focusable.length) return;
+        const first = focusable[0];
+        const last = focusable.at(-1);
+        if (event.shiftKey && document.activeElement === first) {
+          event.preventDefault();
+          last.focus();
+        } else if (!event.shiftKey && document.activeElement === last) {
+          event.preventDefault();
+          first.focus();
+        }
+      });
 
       updateLiveButton();
       bootstrapToken();

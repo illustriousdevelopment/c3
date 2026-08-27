@@ -25,5 +25,13 @@ private struct RootView: View {
                 SessionBoardView()
             }
         }
+        .task {
+#if DEBUG
+            if store.configuration == nil,
+               let pairingLink = ProcessInfo.processInfo.environment["C3_REMOTE_PAIRING_LINK"] {
+                _ = await store.connect(pairingLink: pairingLink, persist: false)
+            }
+#endif
+        }
     }
 }

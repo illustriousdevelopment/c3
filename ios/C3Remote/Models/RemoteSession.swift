@@ -88,6 +88,44 @@ struct RemoteSession: Identifiable, Codable, Hashable {
     }
 }
 
+struct RemoteSessionGroup: Identifiable, Codable, Hashable {
+    let id: String
+    let name: String
+    let color: String
+    let matchText: [String]
+    let createdAt: String
+}
+
+struct RemoteSessionMeta: Codable, Hashable {
+    let tag: String?
+    let pinned: Bool
+    let groupId: String?
+    let groupAssignment: String?
+}
+
+struct RemoteSessionMetaStore: Codable {
+    let sessions: [String: RemoteSessionMeta]
+    let groups: [RemoteSessionGroup]
+}
+
+struct RemoteDashboard: Codable {
+    let sessions: [RemoteSession]
+    let sessionMeta: RemoteSessionMetaStore
+}
+
+struct RemoteProject: Identifiable, Codable, Hashable {
+    var id: String { path }
+    let name: String
+    let path: String
+    let active: Bool
+}
+
+struct RemoteLaunchResult: Codable {
+    let tmuxTarget: String
+    let agentKind: String
+    let projectPath: String
+}
+
 struct TerminalSpan: Codable, Hashable {
     let text: String
     let foreground: String?

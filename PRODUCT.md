@@ -30,7 +30,7 @@ C3 derives its operational view from the user's existing tmux sessions and agent
 - Supports Claude Code, Codex, and Oh My Pi sessions running in tmux.
 - Remote access is optional and disabled by default.
 - The remote server binds only to loopback or a Tailscale address, never all interfaces.
-- Remote clients can list sessions, inspect a pane capture, and send text plus Enter to a pane.
+- Remote clients can list and group sessions, inspect a pane capture, send text plus Enter to a pane, and start a supported agent in an allowed project directory.
 - A high-entropy token is required in addition to Tailscale network access.
 - The browser client should work immediately; the native iOS client should be suitable for TestFlight distribution.
 - C3 does not replace tmux, expose a general shell, or provide internet-facing hosting.

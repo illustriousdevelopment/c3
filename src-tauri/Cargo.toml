@@ -1,6 +1,6 @@
 [package]
 name = "c3"
-version = "0.3.2"
+version = "0.4.0"
 description = "Carmelo Command Center - Visual session manager"
 authors = ["jonpatterson"]
 edition = "2021"

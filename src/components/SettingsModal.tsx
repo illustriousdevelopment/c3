@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { open } from '@tauri-apps/plugin-dialog';
-import { Volume2, Check, X, AlertTriangle, Download, RefreshCw, Copy, RotateCw, Wifi } from 'lucide-react';
+import { Volume2, Check, X, AlertTriangle, Download, RefreshCw, Copy, RotateCw, Wifi, FolderPlus } from 'lucide-react';
 import type { AppSettings, SoundConfig, HookStatus, SetupResult, RemoteAccessInfo } from '../types';
 
 interface SettingsModalProps {
@@ -39,6 +39,7 @@ const defaultSettings: AppSettings = {
   remote_bind_address: 'auto',
   remote_port: 9399,
   remote_access_token: '',
+  remote_project_roots: ['~/code', '~/projects', '~/repositories'],
 };
 
 interface SoundConfigRowProps {
@@ -237,6 +238,22 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
     window.setTimeout(() => setCopiedPairingLink(false), 1800);
   };
 
+  const addRemoteProjectRoot = async () => {
+    const folder = await open({ directory: true, multiple: false });
+    if (typeof folder !== 'string') return;
+    setSettings((current) => ({
+      ...current,
+      remote_project_roots: Array.from(new Set([...current.remote_project_roots, folder])),
+    }));
+  };
+
+  const removeRemoteProjectRoot = (root: string) => {
+    setSettings((current) => ({
+      ...current,
+      remote_project_roots: current.remote_project_roots.filter((candidate) => candidate !== root),
+    }));
+  };
+
   if (!isOpen) return null;
 
   return (
@@ -278,6 +295,7 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
             >
               <option value="codex">Codex</option>
               <option value="claude">Claude Code</option>
+              <option value="omp">OMP</option>
             </select>
           </div>
 
@@ -383,6 +401,39 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
                     })}
                   />
                 </label>
+
+                <div className="remote-project-roots">
+                  <div className="remote-project-roots-heading">
+                    <div>
+                      <span>Project folders</span>
+                      <small>New-agent search scans one level inside these folders.</small>
+                    </div>
+                    <button type="button" onClick={addRemoteProjectRoot}>
+                      <FolderPlus size={13} />
+                      Add folder
+                    </button>
+                  </div>
+                  {settings.remote_project_roots.length > 0 ? (
+                    <div className="remote-project-root-list">
+                      {settings.remote_project_roots.map((root) => (
+                        <div className="remote-project-root" key={root}>
+                          <span title={root}>{root}</span>
+                          <button
+                            type="button"
+                            onClick={() => removeRemoteProjectRoot(root)}
+                            aria-label={`Remove ${root}`}
+                          >
+                            <X size={12} />
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="remote-project-root-empty">
+                      Add at least one folder before starting agents remotely.
+                    </p>
+                  )}
+                </div>
 
                 <div className="pairing-link-field">
                   <label htmlFor="remote-pairing-link">Pairing link</label>

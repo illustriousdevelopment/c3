@@ -1,11 +1,17 @@
 use crate::ansi::{parse_ansi_capture, AnsiSpan, ParsedAnsi};
-use crate::{cmd, load_settings, AppSettings, AppState, C3Session};
+use crate::{
+    agent_launch_command, cmd, launch_agent_in_tmux, load_session_meta, load_settings, AppSettings,
+    AppState, C3Session, SessionMetaStore,
+};
 use chrono::Utc;
+use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::fs;
 use std::io::Write as _;
 use std::net::{IpAddr, Ipv4Addr};
 use std::process::Stdio;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, LazyLock};
 use std::time::{Duration, Instant};
 use tokio::io::{AsyncReadExt, AsyncWrite, AsyncWriteExt};
@@ -24,6 +30,7 @@ const REMOTE_STREAM_LIMIT: usize = 4;
 const MAX_STREAM_FRAME_BYTES: usize = 8 * 1024 * 1024;
 static REMOTE_STREAM_SLOTS: LazyLock<Arc<Semaphore>> =
     LazyLock::new(|| Arc::new(Semaphore::new(REMOTE_STREAM_LIMIT)));
+static LAST_REMOTE_LAUNCH: LazyLock<Mutex<Option<Instant>>> = LazyLock::new(|| Mutex::new(None));
 const MANIFEST: &str = r##"{
   "name": "C3 Remote",
   "short_name": "C3",
@@ -77,6 +84,38 @@ struct PaneCapture {
     captured_at: String,
 }
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RemoteDashboard {
+    sessions: Vec<C3Session>,
+    session_meta: SessionMetaStore,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RemoteProject {
+    name: String,
+    path: String,
+    active: bool,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RemoteLaunchRequest {
+    agent_kind: String,
+    project_path: String,
+    #[serde(default)]
+    prompt: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RemoteLaunchResult {
+    tmux_target: String,
+    agent_kind: String,
+    project_path: String,
+}
+
 fn default_submit() -> bool {
     true
 }
@@ -123,6 +162,167 @@ pub fn validate_settings(settings: &AppSettings) -> Result<(), String> {
         return Err("Generate an access token before enabling Remote access.".to_string());
     }
     resolve_bind_address(settings).map(|_| ())
+}
+
+fn sorted_sessions(state: &Arc<AppState>) -> Vec<C3Session> {
+    let mut sessions: Vec<C3Session> = state.sessions.read().values().cloned().collect();
+    sessions.sort_by(|left, right| right.last_activity.cmp(&left.last_activity));
+    sessions
+}
+
+fn effective_session_meta(sessions: &[C3Session]) -> SessionMetaStore {
+    let mut store = load_session_meta();
+    store.groups.sort_by_key(|group| group.created_at);
+    for session in sessions {
+        let existing = store.sessions.get(&session.id);
+        if existing.and_then(|meta| meta.group_id.as_ref()).is_some()
+            || existing.and_then(|meta| meta.group_assignment.as_deref()) == Some("manual")
+        {
+            continue;
+        }
+        let haystack = format!(
+            "{}\n{}",
+            session.project_name,
+            session.project_path.as_deref().unwrap_or_default()
+        )
+        .to_lowercase();
+        if let Some(group) = store.groups.iter().find(|group| {
+            group.match_text.iter().any(|needle| {
+                let needle = needle.trim().to_lowercase();
+                !needle.is_empty() && haystack.contains(&needle)
+            })
+        }) {
+            let meta = store.sessions.entry(session.id.clone()).or_default();
+            meta.group_id = Some(group.id.clone());
+            meta.group_assignment = Some("auto".to_string());
+        }
+    }
+    store
+}
+
+fn remote_dashboard(state: &Arc<AppState>) -> RemoteDashboard {
+    let sessions = sorted_sessions(state);
+    let session_meta = effective_session_meta(&sessions);
+    RemoteDashboard {
+        sessions,
+        session_meta,
+    }
+}
+
+fn expand_home_path(value: &str) -> PathBuf {
+    let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
+    if value == "~" {
+        return PathBuf::from(home);
+    }
+    if let Some(rest) = value.strip_prefix("~/") {
+        return PathBuf::from(home).join(rest);
+    }
+    PathBuf::from(value)
+}
+
+fn configured_project_roots(settings: &AppSettings) -> Vec<PathBuf> {
+    settings
+        .remote_project_roots
+        .iter()
+        .filter_map(|root| fs::canonicalize(expand_home_path(root)).ok())
+        .filter(|root| root.is_dir())
+        .collect()
+}
+
+fn remote_project_catalog(state: &Arc<AppState>, settings: &AppSettings) -> Vec<RemoteProject> {
+    let mut projects: HashMap<String, RemoteProject> = HashMap::new();
+    for root in configured_project_roots(settings) {
+        let entries = match fs::read_dir(&root) {
+            Ok(entries) => entries,
+            Err(_) => continue,
+        };
+        for entry in entries.filter_map(Result::ok).take(500) {
+            let name = entry.file_name().to_string_lossy().to_string();
+            if name.starts_with('.') {
+                continue;
+            }
+            let path = match fs::canonicalize(entry.path()) {
+                Ok(path) if path.is_dir() && path.starts_with(&root) => path,
+                _ => continue,
+            };
+            let path_string = path.to_string_lossy().to_string();
+            projects.entry(path_string.clone()).or_insert(RemoteProject {
+                name,
+                path: path_string,
+                active: false,
+            });
+        }
+    }
+
+    for session in state.sessions.read().values() {
+        let Some(path) = session.project_path.as_deref() else {
+            continue;
+        };
+        let path = match fs::canonicalize(path) {
+            Ok(path) if path.is_dir() => path,
+            _ => continue,
+        };
+        let path_string = path.to_string_lossy().to_string();
+        let name = path
+            .file_name()
+            .map(|name| name.to_string_lossy().to_string())
+            .filter(|name| !name.is_empty())
+            .unwrap_or_else(|| path_string.clone());
+        projects.insert(
+            path_string.clone(),
+            RemoteProject {
+                name,
+                path: path_string,
+                active: true,
+            },
+        );
+    }
+
+    let mut projects: Vec<RemoteProject> = projects.into_values().collect();
+    projects.sort_by(|left, right| {
+        right
+            .active
+            .cmp(&left.active)
+            .then_with(|| left.name.to_lowercase().cmp(&right.name.to_lowercase()))
+            .then_with(|| left.path.cmp(&right.path))
+    });
+    projects.truncate(500);
+    projects
+}
+
+fn allowed_project_path(
+    state: &Arc<AppState>,
+    settings: &AppSettings,
+    requested: &str,
+) -> Result<PathBuf, String> {
+    let requested = Path::new(requested);
+    if !requested.is_absolute() {
+        return Err("Project path must be absolute.".to_string());
+    }
+    let canonical = fs::canonicalize(requested)
+        .map_err(|_| "Project is unavailable. Refresh the project list and try again.".to_string())?;
+    let allowed: HashSet<String> = remote_project_catalog(state, settings)
+        .into_iter()
+        .map(|project| project.path)
+        .collect();
+    if allowed.contains(canonical.to_string_lossy().as_ref()) {
+        Ok(canonical)
+    } else {
+        Err("Project is not inside a configured C3 project folder.".to_string())
+    }
+}
+
+fn claim_remote_launch_slot() -> Result<(), String> {
+    let mut last_launch = LAST_REMOTE_LAUNCH.lock();
+    if last_launch
+        .as_ref()
+        .map(|instant| instant.elapsed() < Duration::from_secs(2))
+        .unwrap_or(false)
+    {
+        return Err("Wait a moment before starting another agent.".to_string());
+    }
+    *last_launch = Some(Instant::now());
+    Ok(())
 }
 
 fn detect_tailscale_ipv4() -> Option<Ipv4Addr> {
@@ -344,9 +544,18 @@ async fn handle_remote_request(
             write_response(&mut stream, 200, "application/json", &body).await
         }
         ("GET", "/api/sessions") => {
-            let mut sessions: Vec<C3Session> = state.sessions.read().values().cloned().collect();
-            sessions.sort_by(|left, right| right.last_activity.cmp(&left.last_activity));
-            let body = serde_json::to_vec(&sessions).map_err(|error| error.to_string())?;
+            let body =
+                serde_json::to_vec(&sorted_sessions(&state)).map_err(|error| error.to_string())?;
+            write_response(&mut stream, 200, "application/json", &body).await
+        }
+        ("GET", "/api/dashboard") => {
+            let body =
+                serde_json::to_vec(&remote_dashboard(&state)).map_err(|error| error.to_string())?;
+            write_response(&mut stream, 200, "application/json", &body).await
+        }
+        ("GET", "/api/projects") => {
+            let projects = remote_project_catalog(&state, &settings);
+            let body = serde_json::to_vec(&projects).map_err(|error| error.to_string())?;
             write_response(&mut stream, 200, "application/json", &body).await
         }
         ("GET", "/api/capture") => {
@@ -394,6 +603,50 @@ async fn handle_remote_request(
                 settings.remote_access_token.clone(),
             )
             .await
+        }
+        ("POST", "/api/launch") => {
+            let input: RemoteLaunchRequest = match serde_json::from_slice(&request.body) {
+                Ok(input) => input,
+                Err(_) => return json_error(&mut stream, 400, "Launch request must be valid JSON").await,
+            };
+            if input.prompt.as_deref().map(str::len).unwrap_or(0) > 16 * 1024 {
+                return json_error(&mut stream, 413, "Initial prompt exceeds 16 KiB").await;
+            }
+            let agent_kind = input.agent_kind.to_lowercase();
+            if let Err(error) = agent_launch_command(&agent_kind, input.prompt.as_deref()) {
+                return json_error(&mut stream, 400, &error).await;
+            }
+            let project_path = match allowed_project_path(&state, &settings, &input.project_path) {
+                Ok(path) => path,
+                Err(error) => return json_error(&mut stream, 400, &error).await,
+            };
+            if let Err(error) = claim_remote_launch_slot() {
+                return json_error(&mut stream, 429, &error).await;
+            }
+            let project_path_string = project_path.to_string_lossy().to_string();
+            let launch_agent_kind = agent_kind.clone();
+            let launch_project_path = project_path.clone();
+            let prompt = input.prompt;
+            let launched = tokio::task::spawn_blocking(move || {
+                launch_agent_in_tmux(
+                    &launch_agent_kind,
+                    &launch_project_path,
+                    prompt.as_deref(),
+                )
+            })
+            .await
+            .map_err(|error| error.to_string())?;
+            let tmux_target = match launched {
+                Ok(target) => target,
+                Err(error) => return json_error(&mut stream, 502, &error).await,
+            };
+            let body = serde_json::to_vec(&RemoteLaunchResult {
+                tmux_target,
+                agent_kind,
+                project_path: project_path_string,
+            })
+            .map_err(|error| error.to_string())?;
+            write_response(&mut stream, 200, "application/json", &body).await
         }
         ("POST", "/api/input") => {
             let input: RemoteInputRequest = match serde_json::from_slice(&request.body) {
@@ -886,6 +1139,63 @@ mod tests {
         assert_eq!(token.len(), 64);
         assert!(token.chars().all(|character| character.is_ascii_hexdigit()));
     }
+
+    #[test]
+    fn project_catalog_bounds_remote_launch_paths() {
+        let base = std::env::temp_dir().join(format!("c3-project-catalog-{}", Uuid::new_v4()));
+        let root = base.join("code");
+        let project = root.join("allowed-project");
+        let outside = base.join("outside-project");
+        fs::create_dir_all(&project).unwrap();
+        fs::create_dir_all(&outside).unwrap();
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&outside, root.join("escaped-link")).unwrap();
+
+        let mut settings = AppSettings::default();
+        settings.remote_project_roots = vec![root.to_string_lossy().to_string()];
+        let state = Arc::new(AppState::new());
+        let catalog = remote_project_catalog(&state, &settings);
+        assert_eq!(catalog.len(), 1);
+        assert_eq!(catalog[0].name, "allowed-project");
+        assert!(allowed_project_path(
+            &state,
+            &settings,
+            project.to_string_lossy().as_ref()
+        )
+        .is_ok());
+        assert!(allowed_project_path(
+            &state,
+            &settings,
+            outside.to_string_lossy().as_ref()
+        )
+        .is_err());
+        assert!(allowed_project_path(&state, &settings, "relative-project").is_err());
+        #[cfg(unix)]
+        assert!(!catalog.iter().any(|entry| entry.name == "escaped-link"));
+
+        assert_eq!(
+            launch_agent_in_tmux("shell", &project, None).unwrap_err(),
+            "Agent must be claude, codex, or omp."
+        );
+
+        let _ = fs::remove_dir_all(base);
+    }
+    #[test]
+    fn launch_prompt_is_positional_and_rejects_terminal_controls() {
+        let (_, command) = agent_launch_command("omp", Some("--approval-mode=yolo")).unwrap();
+        assert!(command.starts_with("omp 'Task:\n--approval-mode=yolo'"));
+
+        let (_, quoted) = agent_launch_command("claude", Some("'\u{3b} echo owned #")).unwrap();
+        assert!(quoted.contains("'\\''; echo owned #"));
+
+        for prompt in ["erase\u{15}prefix", "cancel\u{3}launch", "nul\0byte"] {
+            assert_eq!(
+                agent_launch_command("codex", Some(prompt)).unwrap_err(),
+                "Initial prompt contains unsupported control characters."
+            );
+        }
+    }
+
 
     #[test]
     fn sse_frames_are_single_complete_events() {

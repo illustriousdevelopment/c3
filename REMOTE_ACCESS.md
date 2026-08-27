@@ -18,6 +18,8 @@ The Mac remains authoritative. Both clients use the same small HTTP API and neve
 - See all detected sessions and their attention state from an iPhone.
 - Open one session and read a recent tmux pane capture.
 - Type or dictate through the standard iOS keyboard, then send the response to that pane.
+- Switch between attention ordering and the same project groups configured on the Mac.
+- Start a Claude Code, Codex, or OMP agent in an allowed project folder, with an optional initial prompt.
 - Work over Tailscale without opening C3 to the public internet or local LAN.
 - Remain optional, off by default, and understandable from C3 Settings.
 
@@ -26,7 +28,7 @@ The Mac remains authoritative. Both clients use the same small HTTP API and neve
 - A general-purpose remote shell or full terminal emulator.
 - Internet hosting, account management, teams, or multi-user authorization.
 - Replacing Tailscale with custom networking.
-- Mirroring every desktop grouping and administrative control on mobile.
+- Mirroring every desktop administrative control on mobile.
 - Sending arbitrary tmux key sequences in the first release.
 
 ## User flow
@@ -36,17 +38,19 @@ The Mac remains authoritative. Both clients use the same small HTTP API and neve
 1. Open C3 Settings → Remote access.
 2. Enable remote access.
 3. C3 detects the Mac’s Tailscale IPv4 address and generates a private access token.
-4. Save settings. C3 binds the configured port on that Tailscale address only.
-5. Copy the pairing link for Safari or the iOS app.
+4. Add or remove project roots that remote clients may use when starting agents. C3 defaults to `~/code`, `~/projects`, and `~/repositories`.
+5. Save settings. C3 binds the configured port on that Tailscale address only.
+6. Copy the pairing link for Safari or the iOS app.
 
 ### Check from phone
 
 1. Open the pairing link while connected to Tailscale.
-2. See a compact session board ordered by attention and recency.
-3. Tap a session.
-4. Read the latest pane output.
-5. Enter a response using typing or iOS keyboard dictation and tap Send.
-6. C3 pastes the text into the exact tmux pane and sends Enter.
+2. See a compact session board ordered by attention and recency, or switch to **Groups** to use C3's configured project groups.
+3. Tap **New**, choose OMP, Claude, or Codex, select an allowed project, optionally add a prompt, and start the agent in a new tmux window.
+4. Tap a session.
+5. Read the latest pane output.
+6. Enter a response using typing or iOS keyboard dictation and tap Send.
+7. C3 pastes the text into the exact tmux pane and sends Enter.
 
 ## Interface
 
@@ -54,6 +58,8 @@ The mobile board follows the supplied k-stack reference:
 
 - Dark, low-chrome top bar with C3 identity and connection state.
 - Agent count and search directly under the bar.
+- **Attention / Groups** switches between urgency ordering and desktop-configured project groups without changing the underlying sessions.
+- **New agent** opens a focused launch sheet with a three-agent selector, searchable project catalog, optional initial prompt, and one start action.
 - Two-column session cards on wider phones; one column on narrow screens or at accessibility text sizes.
 - Project/session name, current task or pending action, explicit state label, agent kind, and a small state light.
 - No desktop lanes, charts, metrics, gradients, glass, or decorative dashboard widgets.
@@ -71,6 +77,26 @@ Returns server version and status for pairing validation.
 ### `GET /api/sessions`
 
 Returns the current serialized C3 session list. Clients order sessions locally by attention state and recency.
+
+### `GET /api/dashboard`
+
+Returns the current session list plus effective session metadata and configured groups. Automatic group matching is applied consistently with the desktop board without persisting a remote-only assignment.
+
+### `GET /api/projects`
+
+Returns at most 500 canonical project directories. The catalog includes immediate child directories of the project roots configured in C3 Settings plus valid directories used by active sessions. Hidden directories and symlinks that resolve outside a configured root are excluded.
+
+### `POST /api/launch`
+
+```json
+{
+  "agentKind": "omp",
+  "projectPath": "/Users/me/code/c3",
+  "prompt": "Check the failing build and propose the smallest fix."
+}
+```
+
+The agent kind is restricted to `claude`, `codex`, or `omp`. The project path must exactly match the current canonical project catalog. C3 creates a new tmux window in that directory and passes the optional prompt as one shell-quoted positional argument through tmux's non-interactive startup command, not terminal keystrokes. A fixed `Task:` prefix prevents option injection; C0 controls other than newline and tab are rejected. Initial prompts are capped at 16 KiB and launches are rate-limited.
 
 ### `GET /api/capture?sessionId=<id>`
 
@@ -119,7 +145,7 @@ C3 writes the text through a temporary tmux buffer and sends Enter only when `su
 - The browser receives the token in the URL fragment, which is not sent in HTTP requests or server logs; it stores the token locally and removes the fragment from visible history.
 - Live streams are revoked when remote access is disabled, rebound, or its token rotates; at most four streams may run concurrently.
 - The static client contains no session data and may load without authentication.
-- The API exposes session summaries, pane capture, and text submission only—no arbitrary command endpoint.
+- The API exposes session summaries, pane capture, text submission, configured group metadata, a bounded project catalog, and restricted agent launch. It does not expose an arbitrary command or path endpoint.
 - Tailscale supplies encrypted transport and device/network authorization. Plain HTTP must not be used outside Tailscale.
 
 ## Why C3 does not use `tmux pipe-pane`
@@ -141,6 +167,7 @@ C3 instead samples tmux's already-rendered pane, preserves safe ANSI styling, an
 - Stream failures preserve the last readable pane, fall back to snapshot polling, and reconnect with bounded backoff.
 - Server configuration changes restart only the remote listener, not C3 or tmux scanning.
 - Sending input resolves the session ID against C3’s current in-memory map immediately before writing.
+- Remote launches accept only the three supported agent binaries and a canonical directory from the current bounded project catalog. A two-second global cooldown prevents accidental launch bursts.
 
 ## Acceptance criteria
 
@@ -151,6 +178,9 @@ C3 instead samples tmux's already-rendered pane, preserves safe ANSI styling, an
 - A phone browser can list sessions, open a pane, and submit text to the correct pane.
 - The web board is usable at 390×844 and does not exceed two columns.
 - Session search filters by title, project, agent kind, and pending-action text.
+- **Groups** mirrors configured desktop groups and applies the same automatic match text.
+- The project picker exposes only configured-root children and active session directories.
+- Remote launch starts the selected supported agent in the selected allowed directory and rejects arbitrary paths or commands.
 - Native portrait and landscape layouts preserve the two-column ceiling.
 - The iOS app accepts the same pairing URL and completes the same read/respond workflow.
 - Live mode refreshes an active pane several times per second; Saver mode remains selectable on web and iOS.

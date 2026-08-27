@@ -1,10 +1,19 @@
 import SwiftUI
 
+private enum SessionBoardMode: String, CaseIterable, Identifiable {
+    case attention = "Attention"
+    case groups = "Groups"
+
+    var id: String { rawValue }
+}
+
 struct SessionBoardView: View {
     @EnvironmentObject private var store: RemoteStore
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @State private var searchText = ""
     @State private var navigationPath: [RemoteSession] = []
+    @State private var boardMode: SessionBoardMode = .attention
+    @State private var showingNewAgent = false
 
     private var filteredSessions: [RemoteSession] {
         let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -35,60 +44,36 @@ struct SessionBoardView: View {
                 LazyVStack(alignment: .leading, spacing: 14) {
                     statusLine
 
-                    if store.sessions.isEmpty && store.isRefreshing {
-                        ProgressView("Loading agents…")
-                            .frame(maxWidth: .infinity)
-                            .padding(.top, 100)
-                    } else if store.sessions.isEmpty, let error = store.errorMessage {
-                        ContentUnavailableView {
-                            Label("Could not reach C3", systemImage: "wifi.exclamationmark")
-                        } description: {
-                            Text(error)
-                        } actions: {
-                            Button("Try Again") {
-                                Task { await store.refresh() }
-                            }
-                        }
-                        .frame(maxWidth: .infinity)
-                        .padding(.top, 70)
-                    } else if store.sessions.isEmpty {
-                        ContentUnavailableView(
-                            "No agent panes",
-                            systemImage: "rectangle.stack",
-                            description: Text("C3 will add sessions when an agent starts in tmux.")
-                        )
-                        .frame(maxWidth: .infinity)
-                        .padding(.top, 80)
-                    } else if filteredSessions.isEmpty {
-                        ContentUnavailableView(
-                            "No matching agents",
-                            systemImage: "magnifyingglass",
-                            description: Text("Try another project, task, or agent name.")
-                        )
-                        .frame(maxWidth: .infinity)
-                        .padding(.top, 70)
-                    } else {
-                        LazyVGrid(columns: columns, spacing: 10) {
-                            ForEach(filteredSessions) { session in
-                                NavigationLink(value: session) {
-                                    SessionTile(session: session)
-                                }
-                                .buttonStyle(.plain)
-                            }
+                    Picker("Session view", selection: $boardMode) {
+                        ForEach(SessionBoardMode.allCases) { mode in
+                            Text(mode.rawValue).tag(mode)
                         }
                     }
+                    .pickerStyle(.segmented)
+
+                    boardContent
                 }
                 .padding(.horizontal, 12)
                 .padding(.bottom, 24)
+                .frame(maxWidth: 760)
+                .frame(maxWidth: .infinity)
             }
             .background(Color(uiColor: .systemBackground))
             .navigationTitle("C3 Remote")
             .navigationBarTitleDisplayMode(.large)
             .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
+                ToolbarItemGroup(placement: .topBarTrailing) {
+                    Button("New agent", systemImage: "plus") {
+                        showingNewAgent = true
+                    }
+
                     Menu {
                         Text(store.endpointLabel)
-                        Button("Disconnect", systemImage: "rectangle.portrait.and.arrow.right", role: .destructive) {
+                        Button(
+                            "Disconnect",
+                            systemImage: "rectangle.portrait.and.arrow.right",
+                            role: .destructive
+                        ) {
                             store.disconnect()
                         }
                     } label: {
@@ -105,14 +90,136 @@ struct SessionBoardView: View {
             .navigationDestination(for: RemoteSession.self) { session in
                 SessionDetailView(session: session)
             }
+            .sheet(isPresented: $showingNewAgent) {
+                NewAgentView()
+                    .environmentObject(store)
+            }
             .refreshable { await store.refresh() }
             .task {
                 await store.refresh()
-                openDebugSessionIfNeeded()
+                applyDebugPresentationIfNeeded()
                 while !Task.isCancelled {
-                    try? await Task.sleep(for: .seconds(3))
+                    do {
+                        try await Task.sleep(for: .seconds(3))
+                    } catch {
+                        return
+                    }
                     await store.refresh()
                 }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var boardContent: some View {
+        if store.sessions.isEmpty && store.isRefreshing {
+            ProgressView("Loading agents…")
+                .frame(maxWidth: .infinity)
+                .padding(.top, 100)
+        } else if store.sessions.isEmpty, let error = store.errorMessage {
+            ContentUnavailableView {
+                Label("Could not reach C3", systemImage: "wifi.exclamationmark")
+            } description: {
+                Text(error)
+            } actions: {
+                Button("Try Again") {
+                    Task { await store.refresh() }
+                }
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.top, 70)
+        } else if store.sessions.isEmpty {
+            ContentUnavailableView(
+                "No agent panes",
+                systemImage: "rectangle.stack",
+                description: Text("Start an agent here or in tmux on your Mac.")
+            )
+            .frame(maxWidth: .infinity)
+            .padding(.top, 80)
+        } else if filteredSessions.isEmpty {
+            ContentUnavailableView(
+                "No matching agents",
+                systemImage: "magnifyingglass",
+                description: Text("Try another project, task, or agent name.")
+            )
+            .frame(maxWidth: .infinity)
+            .padding(.top, 70)
+        } else if boardMode == .attention {
+            sessionGrid(filteredSessions)
+        } else {
+            groupedSessions
+        }
+    }
+
+    private func sessionGrid(_ sessions: [RemoteSession]) -> some View {
+        LazyVGrid(columns: columns, spacing: 10) {
+            ForEach(sessions) { session in
+                NavigationLink(value: session) {
+                    SessionTile(session: session)
+                }
+                .buttonStyle(.plain)
+            }
+        }
+    }
+
+    private var groupedSessions: some View {
+        LazyVStack(alignment: .leading, spacing: 22) {
+            ForEach(store.groups) { group in
+                let sessions = filteredSessions.filter {
+                    store.sessionMeta[$0.id]?.groupId == group.id
+                }
+                if searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                    || !sessions.isEmpty {
+                    groupSection(name: group.name, color: group.color, sessions: sessions)
+                }
+            }
+
+            let knownGroupIDs = Set(store.groups.map(\.id))
+            let ungrouped = filteredSessions.filter { session in
+                guard let groupID = store.sessionMeta[session.id]?.groupId else { return true }
+                return !knownGroupIDs.contains(groupID)
+            }
+            if !ungrouped.isEmpty || store.groups.isEmpty {
+                groupSection(name: "Ungrouped", color: "#737b88", sessions: ungrouped)
+            }
+        }
+    }
+
+    private func groupSection(
+        name: String,
+        color: String,
+        sessions: [RemoteSession]
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 8) {
+                Circle()
+                    .fill(Color(c3Hex: color) ?? .secondary)
+                    .frame(width: 9, height: 9)
+                Text(name)
+                    .font(.headline)
+                Spacer()
+                Text("\(sessions.count)")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("\(name), \(sessions.count) \(sessions.count == 1 ? "agent" : "agents")")
+            .accessibilityAddTraits(.isHeader)
+
+            if sessions.isEmpty {
+                Text(searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                     ? "No agents"
+                     : "No matching agents")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 18)
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 5)
+                            .stroke(.separator, style: StrokeStyle(lineWidth: 1, dash: [4]))
+                    }
+            } else {
+                sessionGrid(sessions)
             }
         }
     }
@@ -137,13 +244,32 @@ struct SessionBoardView: View {
         .accessibilityElement(children: .combine)
     }
 
-    private func openDebugSessionIfNeeded() {
+    private func applyDebugPresentationIfNeeded() {
 #if DEBUG
+        let environment = ProcessInfo.processInfo.environment
+        if environment["C3_REMOTE_BOARD_MODE"] == "groups" {
+            boardMode = .groups
+        }
+        if environment["C3_REMOTE_SHOW_NEW_AGENT"] == "1" {
+            showingNewAgent = true
+            return
+        }
         guard navigationPath.isEmpty,
-              let sessionID = ProcessInfo.processInfo.environment["C3_REMOTE_SESSION_ID"],
+              let sessionID = environment["C3_REMOTE_SESSION_ID"],
               let session = store.sessions.first(where: { $0.id == sessionID }) else { return }
         navigationPath.append(session)
 #endif
     }
 }
 
+private extension Color {
+    init?(c3Hex: String) {
+        let value = c3Hex.trimmingCharacters(in: CharacterSet(charactersIn: "#"))
+        guard value.count == 6, let rgb = UInt64(value, radix: 16) else { return nil }
+        self.init(
+            red: Double((rgb >> 16) & 0xff) / 255,
+            green: Double((rgb >> 8) & 0xff) / 255,
+            blue: Double(rgb & 0xff) / 255
+        )
+    }
+}

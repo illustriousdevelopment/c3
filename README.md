@@ -24,6 +24,7 @@ When running lots of projects in parallel, C3 makes it easier to see which agent
 - **Guarded terminal kill** — Kill a selected tmux-backed session from the menu or keyboard, with confirmation by default
 - **Readable paths** — Selected sessions marquee the full project path so long paths are easier to scan
 - **Session tagging & pinning** — Organize sessions by project or priority
+- **Private phone control** — Search or group agents, read live pane output, respond, and start supported agents from Safari or the native iPhone app over Tailscale
 - **Hook-based updates** — Sub-second state changes via Claude Code and Codex hooks, with tmux scanner fallback
 
 ## Requirements
@@ -48,7 +49,7 @@ brew install --cask c3
 
 Download the latest `.dmg` from [Releases](https://github.com/illustriousdevelopment/c3/releases), open it, and drag C3 to Applications.
 
-Current release: [v0.3.2](https://github.com/illustriousdevelopment/c3/releases/tag/v0.3.2)
+Current release: [v0.4.0](https://github.com/illustriousdevelopment/c3/releases/tag/v0.4.0)
 
 ## Setup
 
@@ -85,11 +86,12 @@ Remote access is optional and disabled by default.
 
 1. Connect the Mac running C3 and your iPhone to the same Tailscale network.
 2. In C3, open **Settings → Remote access**.
-3. Enable **Serve C3 on this Mac's Tailscale address** and save.
-4. Copy the pairing link from Settings and open it in Safari on the iPhone.
-5. Optionally use **Share → Add to Home Screen** for an app-like shortcut.
+3. Enable **Serve C3 on this Mac's Tailscale address**.
+4. Review the project roots remote clients may use when starting agents, then save.
+5. Copy the pairing link from Settings and open it in Safari on the iPhone.
+6. Optionally use **Share → Add to Home Screen** for an app-like shortcut.
 
-The mobile view can search every detected agent, opens recent tmux output with ANSI colors and text styling, and sends typed or dictated responses back to that exact pane. Open panes default to a low-latency live stream; tap **Live** to switch to **Saver** mode with 1.5-second polling. The native app supports portrait and landscape. C3 binds only to loopback or Tailscale's `100.64.0.0/10` range and requires a generated access token. Do not port-forward the remote port or expose it on a LAN/public interface.
+The mobile board can switch between attention ordering and the project groups configured on the Mac. It searches every detected agent, opens recent tmux output with ANSI colors and text styling, and sends typed or dictated responses back to that exact pane. **New** starts Claude Code, Codex, or OMP in a selected project from C3's bounded project catalog, with an optional initial prompt. Open panes default to a low-latency live stream; tap **Live** to switch to **Saver** mode with 1.5-second polling. The native app supports portrait and landscape. C3 binds only to loopback or Tailscale's `100.64.0.0/10` range and requires a generated access token. Do not port-forward the remote port or expose it on a LAN/public interface.
 
 The native SwiftUI client lives in [`ios/`](ios/) and accepts the same pairing link. See [REMOTE_ACCESS.md](REMOTE_ACCESS.md) for the API, security model, and product design.
 

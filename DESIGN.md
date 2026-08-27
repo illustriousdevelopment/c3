@@ -226,6 +226,7 @@ The palette separates structural darkness from sparse operational signals. Deskt
 Desktop is a full-height shell with a draggable header, a scrollable main region padded by 20px, and a centered war room capped at 1200px. Its lanes stack vertically at a 16px rhythm; lane contents use an auto-filling grid with a 280px minimum card column. This density belongs to the workstation surface.
 
 Remote web uses a centered container capped at 920px, safe-area-aware top and bottom padding, and a two-column session grid with a 10px gap. Below 360px it becomes one column; from 700px it increases outer padding, gap, card padding, and card height. The iOS board mirrors the two-column default and switches to one flexible column at accessibility Dynamic Type sizes, lifting restrictive line limits at the same time.
+The board mode switch stays above the session content. **Attention** preserves global urgency ordering. **Groups** stacks the Mac-configured groups vertically, with each group retaining the same two-column ceiling; group color appears only as a small redundant heading marker. The new-agent flow is a transient bottom sheet on web and a native sheet on iOS, never a permanent third board column.
 
 Response controls live only in session detail. Web keeps the composer sticky above the bottom safe area; iOS places it in a bottom safe-area inset. The board remains a scan-and-select surface.
 
@@ -270,6 +271,12 @@ A sticky graphite bar with a 58px minimum height plus top safe-area inset. It pa
 
 ### Remote Search Field
 A full-width 44px native-feeling search field sits between agent count and cards. It filters session title, project, agent kind, and pending-action text without changing attention ordering. Web uses a 7px graphite field with a leading search icon; iOS uses the system searchable navigation drawer.
+### Remote Board Mode
+A two-option segmented control switches between **Attention** and **Groups**. The active segment uses a single stronger graphite fill and primary text. Group headings combine a small configured color dot, plain group name, and quiet session count; session cards remain unchanged inside groups.
+
+### Remote New Agent Sheet
+The top-bar **New** action opens one task-focused sheet. Reading order is agent kind, searchable allowed project list, optional prompt, then the primary start action. Web uses a bottom sheet capped below the viewport with its project list scrolling internally; iOS uses a native `Form` sheet. Paths stay monospaced and secondary. Selection is conveyed by fill or checkmark plus semantic selected state, never color alone.
+
 
 ### Remote Live Mode
 A compact 44px mode control sits beside pane refresh. Green **Live** means low-latency server events are active; muted **Saver** means 1.5-second snapshot polling. The mode changes transport cadence, not terminal content or input behavior, and stops when detail closes.
