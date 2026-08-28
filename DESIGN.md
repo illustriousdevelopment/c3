@@ -284,6 +284,9 @@ A compact 44px mode control sits beside pane refresh. Green **Live** means low-l
 ### Remote Session Card
 The signature attention tile: minimum 174px high, 15px × 15px × 13px padding, a visible 1px line, 3px corners, and a small structural shadow. Reading order is name, task context, strong state label, attention text, then agent kind. The 9px state light is redundant with a text label, never the only state cue.
 
+### Remote Terminal Key Bar
+A horizontally compact row sits directly above the response field in terminal detail. It exposes Escape, Tab, four arrows, and Enter with 44px/44pt minimum targets. Every key has a spoken semantic label, taps are serialized in order, and all seven controls remain visible at standard iPhone widths. The bar supplements the system keyboard; it never grows into an arbitrary hotkey or remote-shell surface.
+
 ### Remote Response Field
 A detail-only multiline field with a 48px minimum height, 12px × 13px padding, visible line, 9px corners, and a global 2px blue focus outline offset by 3px. It grows only to 150px on web; native uses a one-to-five-line rounded text field.
 

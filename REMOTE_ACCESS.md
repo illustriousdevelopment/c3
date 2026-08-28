@@ -18,6 +18,7 @@ The Mac remains authoritative. Both clients use the same small HTTP API and neve
 - See all detected sessions and their attention state from an iPhone.
 - Open one session and read a recent tmux pane capture.
 - Type or dictate through the standard iOS keyboard, then send the response to that pane.
+- Use an on-screen terminal key bar for arrow-key dialogs, Escape, Tab, and Enter.
 - Switch between attention ordering and the same project groups configured on the Mac.
 - Start a Claude Code, Codex, or OMP agent in an allowed project folder, with an optional initial prompt.
 - Work over Tailscale without opening C3 to the public internet or local LAN.
@@ -49,8 +50,9 @@ The Mac remains authoritative. Both clients use the same small HTTP API and neve
 3. Tap **New**, choose OMP, Claude, or Codex, select an allowed project, optionally add a prompt, and start the agent in a new tmux window.
 4. Tap a session.
 5. Read the latest pane output.
-6. Enter a response using typing or iOS keyboard dictation and tap Send.
-7. C3 pastes the text into the exact tmux pane and sends Enter.
+6. Use the on-screen arrow, Escape, Tab, or Enter keys when the terminal shows an interactive dialog.
+7. Enter a response using typing or iOS keyboard dictation and tap Send.
+8. C3 sends the selected navigation keys or pastes the response into the exact tmux pane.
 
 ## Interface
 
@@ -136,6 +138,18 @@ data: {"sessionId":"tmux:0:22.0","styledLines":[…],"revision":"…"}
 
 C3 writes the text through a temporary tmux buffer and sends Enter only when `submit` is true. Request text is capped at 64 KiB.
 
+### `POST /api/key`
+
+```json
+{
+  "sessionId": "tmux:0:22.0",
+  "key": "down",
+  "repeat": 2
+}
+```
+
+The key endpoint accepts only `up`, `down`, `left`, `right`, `escape`, `tab`, or `enter`. Repeat defaults to one and is bounded from one through ten. Clients serialize taps so a sequence such as Down, Down, Enter reaches tmux in order.
+
 ## Security model
 
 - Disabled by default.
@@ -145,7 +159,7 @@ C3 writes the text through a temporary tmux buffer and sends Enter only when `su
 - The browser receives the token in the URL fragment, which is not sent in HTTP requests or server logs; it stores the token locally and removes the fragment from visible history.
 - Live streams are revoked when remote access is disabled, rebound, or its token rotates; at most four streams may run concurrently.
 - The static client contains no session data and may load without authentication.
-- The API exposes session summaries, pane capture, text submission, configured group metadata, a bounded project catalog, and restricted agent launch. It does not expose an arbitrary command or path endpoint.
+- The API exposes session summaries, pane capture, text submission, seven allowlisted terminal navigation keys, configured group metadata, a bounded project catalog, and restricted agent launch. It does not expose arbitrary commands, paths, or key sequences.
 - Tailscale supplies encrypted transport and device/network authorization. Plain HTTP must not be used outside Tailscale.
 
 ## Why C3 does not use `tmux pipe-pane`
@@ -181,6 +195,7 @@ C3 instead samples tmux's already-rendered pane, preserves safe ANSI styling, an
 - **Groups** mirrors configured desktop groups and applies the same automatic match text.
 - The project picker exposes only configured-root children and active session directories.
 - Remote launch starts the selected supported agent in the selected allowed directory and rejects arbitrary paths or commands.
+- Web and iOS terminal detail screens expose 44-point arrow, Escape, Tab, and Enter controls and preserve tap order.
 - Native portrait and landscape layouts preserve the two-column ceiling.
 - The iOS app accepts the same pairing URL and completes the same read/respond workflow.
 - Live mode refreshes an active pane several times per second; Saver mode remains selectable on web and iOS.

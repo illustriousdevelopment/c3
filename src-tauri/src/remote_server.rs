@@ -72,6 +72,15 @@ struct RemoteInputRequest {
     submit: bool,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RemoteKeyRequest {
+    session_id: String,
+    key: String,
+    #[serde(default = "default_key_repeat")]
+    repeat: u8,
+}
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct PaneCapture {
@@ -679,6 +688,44 @@ async fn handle_remote_request(
                 .map_err(|error| error.to_string())?;
             write_response(&mut stream, 200, "application/json", &body).await
         }
+        ("POST", "/api/key") => {
+            let input: RemoteKeyRequest = match serde_json::from_slice(&request.body) {
+                Ok(input) => input,
+                Err(_) => return json_error(&mut stream, 400, "Key input must be valid JSON").await,
+            };
+            let key = match tmux_key_name(&input.key) {
+                Some(key) => key,
+                None => {
+                    return json_error(
+                        &mut stream,
+                        400,
+                        "Key must be up, down, left, right, escape, tab, or enter",
+                    )
+                    .await
+                }
+            };
+            if !(1..=10).contains(&input.repeat) {
+                return json_error(&mut stream, 400, "Key repeat must be between 1 and 10").await;
+            }
+            let session = match find_session(&state, &input.session_id) {
+                Some(session) => session,
+                None => return json_error(&mut stream, 404, "Session not found").await,
+            };
+            let target = match session.tmux_target {
+                Some(target) => target,
+                None => return json_error(&mut stream, 409, "Session has no tmux pane").await,
+            };
+            let repeat = input.repeat;
+            let sent = tokio::task::spawn_blocking(move || send_tmux_key(&target, key, repeat))
+                .await
+                .map_err(|error| error.to_string())?;
+            if let Err(error) = sent {
+                return json_error(&mut stream, 502, &error).await;
+            }
+            let body = serde_json::to_vec(&serde_json::json!({ "ok": true }))
+                .map_err(|error| error.to_string())?;
+            write_response(&mut stream, 200, "application/json", &body).await
+        }
         _ => json_error(&mut stream, 404, "API route not found").await,
     }
 }
@@ -919,6 +966,41 @@ fn send_tmux_input(target: &str, text: &str, submit: bool) -> Result<(), String>
     Ok(())
 }
 
+fn default_key_repeat() -> u8 {
+    1
+}
+
+fn tmux_key_name(key: &str) -> Option<&'static str> {
+    match key {
+        "up" => Some("Up"),
+        "down" => Some("Down"),
+        "left" => Some("Left"),
+        "right" => Some("Right"),
+        "escape" => Some("Escape"),
+        "tab" => Some("Tab"),
+        "enter" => Some("Enter"),
+        _ => None,
+    }
+}
+
+fn send_tmux_key(target: &str, key: &str, repeat: u8) -> Result<(), String> {
+    let mut command = cmd("tmux");
+    command.args(["send-keys", "-t", target]);
+    for _ in 0..repeat {
+        command.arg(key);
+    }
+    let sent = command
+        .output()
+        .map_err(|error| format!("Could not send tmux key: {error}"))?;
+    if !sent.status.success() {
+        return Err(format!(
+            "tmux send-keys failed: {}",
+            String::from_utf8_lossy(&sent.stderr).trim()
+        ));
+    }
+    Ok(())
+}
+
 fn request_is_authorized(request: &HttpRequest, expected_token: &str) -> bool {
     request
         .headers
@@ -1138,6 +1220,27 @@ mod tests {
         let token = generate_access_token();
         assert_eq!(token.len(), 64);
         assert!(token.chars().all(|character| character.is_ascii_hexdigit()));
+    }
+
+    #[test]
+    fn remote_key_input_uses_an_exact_allowlist_and_bounded_default() {
+        for (input, expected) in [
+            ("up", "Up"),
+            ("down", "Down"),
+            ("left", "Left"),
+            ("right", "Right"),
+            ("escape", "Escape"),
+            ("tab", "Tab"),
+            ("enter", "Enter"),
+        ] {
+            assert_eq!(tmux_key_name(input), Some(expected));
+        }
+        assert_eq!(tmux_key_name("C-c"), None);
+        assert_eq!(tmux_key_name("Down;run-command"), None);
+
+        let input: RemoteKeyRequest =
+            serde_json::from_str(r#"{"sessionId":"tmux:0:1.0","key":"down"}"#).unwrap();
+        assert_eq!(input.repeat, 1);
     }
 
     #[test]

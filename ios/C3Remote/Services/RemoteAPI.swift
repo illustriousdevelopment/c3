@@ -123,6 +123,15 @@ struct RemoteAPI {
         let _: SuccessResponse = try await request(path: "/api/input", method: "POST", body: body)
     }
 
+    func sendKey(sessionID: String, key: String) async throws {
+        struct Payload: Encodable {
+            let sessionId: String
+            let key: String
+        }
+        let body = try JSONEncoder().encode(Payload(sessionId: sessionID, key: key))
+        let _: SuccessResponse = try await request(path: "/api/key", method: "POST", body: body)
+    }
+
     private func request<Response: Decodable>(
         path: String,
         method: String = "GET",

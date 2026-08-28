@@ -253,6 +253,31 @@
       padding: 12px 0 max(2px, var(--safe-bottom));
       background: linear-gradient(to bottom, rgba(17,19,24,0), var(--bg) 12px);
     }
+    .terminal-keybar {
+      grid-column: 1 / -1;
+      display: flex;
+      gap: 4px;
+      flex-wrap: wrap;
+    }
+    .terminal-key-button {
+      flex: 0 0 44px;
+      min-width: 44px;
+      min-height: 44px;
+      border: 1px solid #59616e;
+      border-radius: 7px;
+      background: var(--panel);
+      color: var(--text);
+      font: 700 .875rem/1 ui-monospace, "SFMono-Regular", Menlo, Monaco, Consolas, monospace;
+    }
+    .terminal-key-button.text-key {
+      flex-basis: auto;
+      min-width: 46px;
+      padding: 0 7px;
+      font-size: .6875rem;
+      text-transform: uppercase;
+    }
+    .terminal-key-button:active { background: var(--panel-pressed); }
+    .terminal-key-button:disabled { color: var(--faint); border-color: #363d48; }
     .composer textarea {
       width: 100%;
       min-height: 48px;
@@ -464,6 +489,15 @@
         </div>
         <div id="terminal" class="terminal loading" role="region" aria-label="Tmux pane output" tabindex="0">Loading pane…</div>
         <form id="composer" class="composer">
+          <div class="terminal-keybar" role="group" aria-label="Terminal keys">
+            <button class="terminal-key-button text-key" type="button" data-terminal-key="escape" aria-label="Escape key">esc</button>
+            <button class="terminal-key-button text-key" type="button" data-terminal-key="tab" aria-label="Tab key">tab</button>
+            <button class="terminal-key-button" type="button" data-terminal-key="left" aria-label="Left arrow">←</button>
+            <button class="terminal-key-button" type="button" data-terminal-key="up" aria-label="Up arrow">↑</button>
+            <button class="terminal-key-button" type="button" data-terminal-key="down" aria-label="Down arrow">↓</button>
+            <button class="terminal-key-button" type="button" data-terminal-key="right" aria-label="Right arrow">→</button>
+            <button class="terminal-key-button text-key" type="button" data-terminal-key="enter" aria-label="Enter key">enter</button>
+          </div>
           <textarea id="response" rows="1" maxlength="65536" placeholder="Type or dictate a response" aria-label="Response"></textarea>
           <button id="send-button" class="send-button" type="submit" disabled>Send</button>
           <div id="send-status" class="send-status" role="status"></div>
@@ -529,6 +563,9 @@
         streamFailures: 0,
         boardTimer: null,
         paneTimer: null,
+        keyQueue: [],
+        keySending: false,
+        sendingResponse: false,
       };
       const attentionOrder = { awaiting_permission: 0, awaiting_input: 1, processing: 2, spawning: 2, error: 3, complete: 4 };
       const stateLabel = (value) => ({
@@ -1113,12 +1150,75 @@
         event.preventDefault();
         submitLaunch();
       });
-      $('response').addEventListener('input', (event) => { $('send-button').disabled = !event.target.value.trim(); });
+      function updateComposerControls() {
+        $('send-button').disabled = state.sendingResponse
+          || state.keySending
+          || !$('response').value.trim();
+        document.querySelectorAll('[data-terminal-key]').forEach((button) => {
+          button.disabled = state.sendingResponse;
+        });
+      }
+
+      async function drainTerminalKeyQueue() {
+        if (state.keySending) return;
+        state.keySending = true;
+        updateComposerControls();
+        let lastLabel = '';
+        while (state.keyQueue.length) {
+          const input = state.keyQueue.shift();
+          try {
+            await api('/api/key', {
+              method: 'POST',
+              body: JSON.stringify({ sessionId: input.sessionId, key: input.key }),
+            });
+            lastLabel = input.label;
+          } catch (error) {
+            state.keyQueue = [];
+            $('send-status').className = 'send-status error';
+            $('send-status').textContent = error.message;
+            break;
+          }
+        }
+        state.keySending = false;
+        updateComposerControls();
+        if (lastLabel && !$('send-status').classList.contains('error')) {
+          $('send-status').className = 'send-status';
+          $('send-status').textContent = `${lastLabel} sent`;
+          setTimeout(() => {
+            if ($('send-status').textContent === `${lastLabel} sent`) {
+              $('send-status').textContent = '';
+            }
+          }, 900);
+        }
+        if (!state.liveStreaming) setTimeout(refreshPane, 200);
+      }
+
+      function queueTerminalKey(button) {
+        if (!state.selectedId || state.sendingResponse) return;
+        state.keyQueue.push({
+          sessionId: state.selectedId,
+          key: button.dataset.terminalKey,
+          label: button.textContent.trim(),
+        });
+        $('send-status').className = 'send-status';
+        $('send-status').textContent = 'Sending key…';
+        drainTerminalKeyQueue();
+      }
+
+      document.querySelectorAll('[data-terminal-key]').forEach((button) => {
+        button.addEventListener('pointerdown', (event) => {
+          if (document.activeElement === $('response')) event.preventDefault();
+        });
+        button.addEventListener('click', () => queueTerminalKey(button));
+      });
+
+      $('response').addEventListener('input', updateComposerControls);
       $('composer').addEventListener('submit', async (event) => {
         event.preventDefault();
         const text = $('response').value;
-        if (!text.trim() || !state.selectedId) return;
-        $('send-button').disabled = true;
+        if (!text.trim() || !state.selectedId || state.keySending) return;
+        state.sendingResponse = true;
+        updateComposerControls();
         $('send-status').className = 'send-status';
         $('send-status').textContent = 'Sending…';
         try {
@@ -1130,7 +1230,9 @@
         } catch (error) {
           $('send-status').className = 'send-status error';
           $('send-status').textContent = error.message;
-          $('send-button').disabled = false;
+        } finally {
+          state.sendingResponse = false;
+          updateComposerControls();
         }
       });
       window.addEventListener('popstate', (event) => { if (!event.state?.sessionId && state.selectedId) closeDetail(false); });

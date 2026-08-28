@@ -93,6 +93,13 @@ final class RemoteStore: ObservableObject {
         try await RemoteAPI(configuration: configuration).send(sessionID: sessionID, text: text)
     }
 
+    func sendKey(sessionID: String, key: String) async throws {
+        guard let configuration else {
+            throw RemoteAPIError.message("C3 Remote is not paired.")
+        }
+        try await RemoteAPI(configuration: configuration).sendKey(sessionID: sessionID, key: key)
+    }
+
     func projects() async throws -> [RemoteProject] {
         guard let configuration else {
             throw RemoteAPIError.message("C3 Remote is not paired.")

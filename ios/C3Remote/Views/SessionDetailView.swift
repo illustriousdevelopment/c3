@@ -3,6 +3,7 @@ import UIKit
 
 struct SessionDetailView: View {
     @EnvironmentObject private var store: RemoteStore
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     let session: RemoteSession
 
     @State private var paneOutput = AttributedString("Loading pane…")
@@ -12,6 +13,9 @@ struct SessionDetailView: View {
     @State private var streamActive = false
     @State private var draft = ""
     @State private var isSending = false
+    @State private var pendingTerminalKeys: [RemoteTerminalKey] = []
+    @State private var isSendingTerminalKey = false
+    @State private var terminalKeyBurstCount = 0
     @State private var statusMessage: String?
     @State private var sendErrorMessage: String?
     @State private var paneErrorMessage: String?
@@ -86,23 +90,27 @@ struct SessionDetailView: View {
 
     private var composer: some View {
         VStack(alignment: .leading, spacing: 7) {
-            if let sendErrorMessage {
-                Label(sendErrorMessage, systemImage: "exclamationmark.triangle.fill")
-                    .font(.caption)
-                    .foregroundStyle(.red)
-            } else if let paneErrorMessage {
-                Label(paneErrorMessage, systemImage: "wifi.exclamationmark")
-                    .font(.caption)
-                    .foregroundStyle(.orange)
-            } else if let statusMessage {
-                Text(statusMessage)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            } else if let connectionMessage {
-                Text(connectionMessage)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+            terminalKeyBar
+            Group {
+                if let sendErrorMessage {
+                    Label(sendErrorMessage, systemImage: "exclamationmark.triangle.fill")
+                        .foregroundStyle(.red)
+                } else if let paneErrorMessage {
+                    Label(paneErrorMessage, systemImage: "wifi.exclamationmark")
+                        .foregroundStyle(.orange)
+                } else if let statusMessage {
+                    Text(statusMessage)
+                        .foregroundStyle(.secondary)
+                } else if let connectionMessage {
+                    Text(connectionMessage)
+                        .foregroundStyle(.secondary)
+                } else {
+                    Text("Status")
+                        .hidden()
+                }
             }
+            .font(.caption)
+            .frame(minHeight: 18, alignment: .leading)
             HStack(alignment: .bottom, spacing: 8) {
                 TextField("Type or dictate a response", text: $draft, axis: .vertical)
                     .lineLimit(1...5)
@@ -124,7 +132,11 @@ struct SessionDetailView: View {
                             .clipShape(Circle())
                     }
                 }
-                .disabled(draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isSending)
+                .disabled(
+                    draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                        || isSending
+                        || isSendingTerminalKey
+                )
                 .accessibilityLabel("Send response")
             }
         }
@@ -132,6 +144,64 @@ struct SessionDetailView: View {
         .padding(.top, 10)
         .padding(.bottom, 8)
         .background(.bar)
+    }
+
+    @ViewBuilder
+    private var terminalKeyBar: some View {
+        if dynamicTypeSize.isAccessibilitySize {
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 4) {
+                    ForEach([
+                        RemoteTerminalKey.escape,
+                        .tab,
+                        .left,
+                        .up,
+                    ]) { key in
+                        terminalKeyButton(key)
+                    }
+                }
+                HStack(spacing: 4) {
+                    ForEach([
+                        RemoteTerminalKey.down,
+                        .right,
+                        .enter,
+                    ]) { key in
+                        terminalKeyButton(key)
+                    }
+                }
+            }
+            .accessibilityLabel("Terminal keys")
+        } else {
+            ScrollView(.horizontal) {
+                HStack(spacing: 4) {
+                    ForEach(RemoteTerminalKey.allCases) { key in
+                        terminalKeyButton(key)
+                    }
+                }
+            }
+            .scrollIndicators(.hidden)
+            .accessibilityLabel("Terminal keys")
+        }
+    }
+
+    private func terminalKeyButton(_ key: RemoteTerminalKey) -> some View {
+        Button {
+            enqueueTerminalKey(key)
+        } label: {
+            Group {
+                if let systemImage = key.systemImage {
+                    Image(systemName: systemImage)
+                } else {
+                    Text(key.visibleLabel)
+                        .font(.caption2.monospaced().weight(.semibold))
+                        .textCase(.uppercase)
+                }
+            }
+            .frame(minWidth: key.wide ? 48 : 44, minHeight: 44)
+        }
+        .buttonStyle(TerminalKeyButtonStyle())
+        .disabled(isSending)
+        .accessibilityLabel(key.accessibilityLabel)
     }
 
     private func runPaneUpdates() async {
@@ -249,7 +319,8 @@ struct SessionDetailView: View {
 
     private func submitResponse() {
         let response = draft
-        guard !response.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        guard !response.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              !isSendingTerminalKey else { return }
         Task {
             isSending = true
             sendErrorMessage = nil
@@ -277,6 +348,121 @@ struct SessionDetailView: View {
             }
             isSending = false
         }
+    }
+
+    private func enqueueTerminalKey(_ key: RemoteTerminalKey) {
+        pendingTerminalKeys.append(key)
+        terminalKeyBurstCount += 1
+        let count = terminalKeyBurstCount
+        statusMessage = "\(count) \(count == 1 ? "key" : "keys") queued"
+        sendErrorMessage = nil
+        guard !isSendingTerminalKey else { return }
+        isSendingTerminalKey = true
+        Task { @MainActor in
+            await drainTerminalKeyQueue()
+        }
+    }
+
+    @MainActor
+    private func drainTerminalKeyQueue() async {
+        var sentCount = 0
+        while let key = pendingTerminalKeys.first {
+            pendingTerminalKeys.removeFirst()
+            do {
+                try await store.sendKey(sessionID: session.id, key: key.rawValue)
+                sentCount += 1
+            } catch {
+                pendingTerminalKeys.removeAll()
+                terminalKeyBurstCount = 0
+                sendErrorMessage = "Couldn’t send the \(key.accessibilityLabel.lowercased()). Try again."
+                statusMessage = nil
+                UIAccessibility.post(
+                    notification: .announcement,
+                    argument: sendErrorMessage
+                )
+                break
+            }
+        }
+        isSendingTerminalKey = false
+        terminalKeyBurstCount = 0
+        if sentCount > 0, sendErrorMessage == nil {
+            let completion = "\(sentCount) \(sentCount == 1 ? "key" : "keys") sent"
+            statusMessage = completion
+            UIAccessibility.post(
+                notification: .announcement,
+                argument: completion
+            )
+            if !liveMode {
+                try? await Task.sleep(for: .milliseconds(200))
+                await refreshPane()
+            }
+            try? await Task.sleep(for: .seconds(1))
+            if statusMessage == completion {
+                statusMessage = nil
+            }
+        }
+    }
+}
+
+private enum RemoteTerminalKey: String, CaseIterable, Identifiable {
+    case escape
+    case tab
+    case left
+    case up
+    case down
+    case right
+    case enter
+
+    var id: String { rawValue }
+
+    var visibleLabel: String {
+        switch self {
+        case .escape: "esc"
+        case .tab: "tab"
+        case .left: "←"
+        case .up: "↑"
+        case .down: "↓"
+        case .right: "→"
+        case .enter: "enter"
+        }
+    }
+
+    var systemImage: String? {
+        switch self {
+        case .left: "arrow.left"
+        case .up: "arrow.up"
+        case .down: "arrow.down"
+        case .right: "arrow.right"
+        case .escape, .tab, .enter: nil
+        }
+    }
+
+    var wide: Bool {
+        systemImage == nil
+    }
+
+    var accessibilityLabel: String {
+        switch self {
+        case .escape: "Escape key"
+        case .tab: "Tab key"
+        case .left: "Left arrow"
+        case .up: "Up arrow"
+        case .down: "Down arrow"
+        case .right: "Right arrow"
+        case .enter: "Enter key"
+        }
+    }
+}
+
+private struct TerminalKeyButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .background(
+                Color(uiColor: configuration.isPressed
+                      ? .tertiarySystemFill
+                      : .quaternarySystemFill),
+                in: RoundedRectangle(cornerRadius: 7)
+            )
     }
 }
 
