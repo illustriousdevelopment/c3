@@ -3,6 +3,7 @@ import SwiftUI
 private enum SessionBoardMode: String, CaseIterable, Identifiable {
     case attention = "Attention"
     case groups = "Groups"
+    case recent = "Recent"
 
     var id: String { rawValue }
 }
@@ -28,6 +29,24 @@ struct SessionBoardView: View {
         }
     }
 
+    private var recentSessions: [RemoteSession] {
+        filteredSessions.sorted { left, right in
+            let leftDate = store.recentInteractions[left.id]
+            let rightDate = store.recentInteractions[right.id]
+            if leftDate != rightDate {
+                return (leftDate ?? .distantPast) > (rightDate ?? .distantPast)
+            }
+            if left.state.priority != right.state.priority {
+                return left.state.priority < right.state.priority
+            }
+            let nameOrder = left.displayName.localizedCaseInsensitiveCompare(right.displayName)
+            if nameOrder != .orderedSame {
+                return nameOrder == .orderedAscending
+            }
+            return left.id < right.id
+        }
+    }
+
     private var columns: [GridItem] {
         if dynamicTypeSize.isAccessibilitySize {
             return [GridItem(.flexible(), spacing: 10, alignment: .top)]
@@ -44,12 +63,29 @@ struct SessionBoardView: View {
                 LazyVStack(alignment: .leading, spacing: 14) {
                     statusLine
 
-                    Picker("Session view", selection: $boardMode) {
-                        ForEach(SessionBoardMode.allCases) { mode in
-                            Text(mode.rawValue).tag(mode)
+                    if dynamicTypeSize.isAccessibilitySize {
+                        HStack {
+                            Text("Session view")
+                                .font(.subheadline)
+                                .foregroundStyle(.secondary)
+                            Spacer()
+                            Picker("Session view", selection: $boardMode) {
+                                ForEach(SessionBoardMode.allCases) { mode in
+                                    Text(mode.rawValue).tag(mode)
+                                }
+                            }
+                            .labelsHidden()
+                            .pickerStyle(.menu)
+                            .accessibilityLabel("Session view")
                         }
+                    } else {
+                        Picker("Session view", selection: $boardMode) {
+                            ForEach(SessionBoardMode.allCases) { mode in
+                                Text(mode.rawValue).tag(mode)
+                            }
+                        }
+                        .pickerStyle(.segmented)
                     }
-                    .pickerStyle(.segmented)
 
                     boardContent
                 }
@@ -146,18 +182,33 @@ struct SessionBoardView: View {
             .padding(.top, 70)
         } else if boardMode == .attention {
             sessionGrid(filteredSessions)
+        } else if boardMode == .recent {
+            sessionGrid(recentSessions, showPhoneActivity: true)
         } else {
             groupedSessions
         }
     }
 
-    private func sessionGrid(_ sessions: [RemoteSession]) -> some View {
+    private func sessionGrid(
+        _ sessions: [RemoteSession],
+        showPhoneActivity: Bool = false
+    ) -> some View {
         LazyVGrid(columns: columns, spacing: 10) {
             ForEach(sessions) { session in
+                let activity = showPhoneActivity
+                    ? phoneActivity(sessionID: session.id)
+                    : nil
                 NavigationLink(value: session) {
-                    SessionTile(session: session)
+                    SessionTile(
+                        session: session,
+                        localActivityLabel: activity?.visual,
+                        localActivityAccessibilityLabel: activity?.accessibility
+                    )
                 }
                 .buttonStyle(.plain)
+                .simultaneousGesture(TapGesture().onEnded {
+                    store.recordInteraction(sessionID: session.id)
+                })
             }
         }
     }
@@ -224,6 +275,38 @@ struct SessionBoardView: View {
         }
     }
 
+    private func phoneActivity(sessionID: String) -> (
+        visual: String,
+        accessibility: String
+    ) {
+        guard let timestamp = store.recentInteractions[sessionID] else {
+            return ("Not opened here", "No interaction on this phone")
+        }
+        let elapsedSeconds = max(0, Int(Date().timeIntervalSince(timestamp)))
+        if elapsedSeconds < 60 {
+            return ("Phone · now", "Last interaction on this phone, just now")
+        }
+        if elapsedSeconds < 3_600 {
+            let minutes = elapsedSeconds / 60
+            return (
+                "Phone · \(minutes)m",
+                "Last interaction on this phone, \(minutes) \(minutes == 1 ? "minute" : "minutes") ago"
+            )
+        }
+        if elapsedSeconds < 86_400 {
+            let hours = elapsedSeconds / 3_600
+            return (
+                "Phone · \(hours)h",
+                "Last interaction on this phone, \(hours) \(hours == 1 ? "hour" : "hours") ago"
+            )
+        }
+        let days = elapsedSeconds / 86_400
+        return (
+            "Phone · \(days)d",
+            "Last interaction on this phone, \(days) \(days == 1 ? "day" : "days") ago"
+        )
+    }
+
     private var statusLine: some View {
         HStack {
             Text(searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -249,6 +332,8 @@ struct SessionBoardView: View {
         let environment = ProcessInfo.processInfo.environment
         if environment["C3_REMOTE_BOARD_MODE"] == "groups" {
             boardMode = .groups
+        } else if environment["C3_REMOTE_BOARD_MODE"] == "recent" {
+            boardMode = .recent
         }
         if environment["C3_REMOTE_SHOW_NEW_AGENT"] == "1" {
             showingNewAgent = true

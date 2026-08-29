@@ -72,6 +72,9 @@ struct SessionDetailView: View {
         .safeAreaInset(edge: .bottom, spacing: 0) {
             composer
         }
+        .onAppear {
+            store.recordInteraction(sessionID: session.id)
+        }
         .task(id: liveMode) {
             await runPaneUpdates()
         }
@@ -328,6 +331,7 @@ struct SessionDetailView: View {
             UIAccessibility.post(notification: .announcement, argument: "Sending response")
             do {
                 try await store.send(sessionID: session.id, text: response)
+                store.recordInteraction(sessionID: session.id)
                 draft = ""
                 statusMessage = "Sent"
                 UIAccessibility.post(notification: .announcement, argument: "Response sent")
@@ -386,6 +390,7 @@ struct SessionDetailView: View {
         isSendingTerminalKey = false
         terminalKeyBurstCount = 0
         if sentCount > 0, sendErrorMessage == nil {
+            store.recordInteraction(sessionID: session.id)
             let completion = "\(sentCount) \(sentCount == 1 ? "key" : "keys") sent"
             statusMessage = completion
             UIAccessibility.post(

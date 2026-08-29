@@ -272,7 +272,7 @@ A sticky graphite bar with a 58px minimum height plus top safe-area inset. It pa
 ### Remote Search Field
 A full-width 44px native-feeling search field sits between agent count and cards. It filters session title, project, agent kind, and pending-action text without changing attention ordering. Web uses a 7px graphite field with a leading search icon; iOS uses the system searchable navigation drawer.
 ### Remote Board Mode
-A two-option segmented control switches between **Attention** and **Groups**. The active segment uses a single stronger graphite fill and primary text. Group headings combine a small configured color dot, plain group name, and quiet session count; session cards remain unchanged inside groups.
+A three-option segmented control switches between **Attention**, **Groups**, and **Recent**. The active segment uses a single stronger graphite fill and primary text. Groups combines a small configured color dot, plain group name, and quiet session count. Recent sorts by interactions recorded only on the current phone and adds a quiet `Phone · now/2m/3h` footer; sessions never opened on that device say `Not opened here` and remain below interacted sessions.
 
 ### Remote New Agent Sheet
 The top-bar **New** action opens one task-focused sheet. Reading order is agent kind, searchable allowed project list, optional prompt, then the primary start action. Web uses a bottom sheet capped below the viewport with its project list scrolling internally; iOS uses a native `Form` sheet. Paths stay monospaced and secondary. Selection is conveyed by fill or checkmark plus semantic selected state, never color alone.

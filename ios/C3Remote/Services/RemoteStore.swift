@@ -6,6 +6,7 @@ final class RemoteStore: ObservableObject {
     @Published private(set) var sessions: [RemoteSession] = []
     @Published private(set) var sessionMeta: [String: RemoteSessionMeta] = [:]
     @Published private(set) var groups: [RemoteSessionGroup] = []
+    @Published private(set) var recentInteractions: [String: Date] = [:]
     @Published private(set) var isConnected = false
     @Published private(set) var isRefreshing = false
     @Published var errorMessage: String?
@@ -15,11 +16,19 @@ final class RemoteStore: ObservableObject {
         if let pairingLink = ProcessInfo.processInfo.environment["C3_REMOTE_PAIRING_URL"],
            let debugConfiguration = try? PairingConfiguration.parse(pairingLink) {
             configuration = debugConfiguration
+            recentInteractions = RecentSessionStore.load(
+                namespace: debugConfiguration.endpoint.absoluteString
+            )
             try? PairingStore.save(debugConfiguration)
             return
         }
 #endif
         configuration = PairingStore.load()
+        if let configuration {
+            recentInteractions = RecentSessionStore.load(
+                namespace: configuration.endpoint.absoluteString
+            )
+        }
     }
 
     var endpointLabel: String {
@@ -44,6 +53,9 @@ final class RemoteStore: ObservableObject {
                 try PairingStore.save(configuration)
             }
             self.configuration = configuration
+            recentInteractions = RecentSessionStore.load(
+                namespace: configuration.endpoint.absoluteString
+            )
             isConnected = true
             errorMessage = nil
             await refresh()
@@ -64,6 +76,10 @@ final class RemoteStore: ObservableObject {
             sessions = dashboard.sessions
             sessionMeta = dashboard.sessionMeta.sessions
             groups = dashboard.sessionMeta.groups
+            recentInteractions = RecentSessionStore.prune(
+                keeping: Set(dashboard.sessions.map(\.id)),
+                namespace: configuration.endpoint.absoluteString
+            )
             isConnected = true
             errorMessage = nil
         } catch {
@@ -122,6 +138,14 @@ final class RemoteStore: ObservableObject {
         )
     }
 
+    func recordInteraction(sessionID: String) {
+        guard let configuration else { return }
+        recentInteractions[sessionID] = RecentSessionStore.record(
+            sessionID: sessionID,
+            namespace: configuration.endpoint.absoluteString
+        )
+    }
+
     func disconnect() {
         do {
             try PairingStore.remove()
@@ -133,6 +157,7 @@ final class RemoteStore: ObservableObject {
         sessions = []
         sessionMeta = [:]
         groups = []
+        recentInteractions = [:]
         isConnected = false
         errorMessage = nil
     }

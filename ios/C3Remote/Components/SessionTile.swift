@@ -3,6 +3,8 @@ import SwiftUI
 struct SessionTile: View {
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     let session: RemoteSession
+    let localActivityLabel: String?
+    let localActivityAccessibilityLabel: String?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -43,9 +45,17 @@ struct SessionTile: View {
 
             Spacer(minLength: 12)
 
-            Text((session.agentKind ?? "agent").lowercased())
-                .font(.caption)
-                .foregroundStyle(.tertiary)
+            HStack {
+                Text((session.agentKind ?? "agent").lowercased())
+                    .foregroundStyle(.tertiary)
+                Spacer(minLength: 8)
+                if let localActivityLabel {
+                    Text(localActivityLabel)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.trailing)
+                }
+            }
+            .font(.caption)
         }
         .frame(maxWidth: .infinity, minHeight: 176, alignment: .leading)
         .padding(14)
@@ -57,6 +67,15 @@ struct SessionTile: View {
         .clipShape(RoundedRectangle(cornerRadius: 4))
         .contentShape(Rectangle())
         .accessibilityElement(children: .combine)
-        .accessibilityLabel("\(session.displayName), \(session.state.label), \(session.attentionText)")
+        .accessibilityLabel(
+            [
+                session.displayName,
+                session.state.label,
+                session.attentionText,
+                localActivityAccessibilityLabel,
+            ]
+            .compactMap { $0 }
+            .joined(separator: ", ")
+        )
     }
 }

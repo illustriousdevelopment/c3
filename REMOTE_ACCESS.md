@@ -20,6 +20,7 @@ The Mac remains authoritative. Both clients use the same small HTTP API and neve
 - Type or dictate through the standard iOS keyboard, then send the response to that pane.
 - Use an on-screen terminal key bar for arrow-key dialogs, Escape, Tab, and Enter.
 - Switch between attention ordering and the same project groups configured on the Mac.
+- Switch to a device-local **Recent** view ordered by interactions made on that phone.
 - Start a Claude Code, Codex, or OMP agent in an allowed project folder, with an optional initial prompt.
 - Work over Tailscale without opening C3 to the public internet or local LAN.
 - Remain optional, off by default, and understandable from C3 Settings.
@@ -46,7 +47,7 @@ The Mac remains authoritative. Both clients use the same small HTTP API and neve
 ### Check from phone
 
 1. Open the pairing link while connected to Tailscale.
-2. See a compact session board ordered by attention and recency, or switch to **Groups** to use C3's configured project groups.
+2. See a compact session board ordered by attention and recency, switch to **Groups** for C3's configured project groups, or use **Recent** for sessions opened or controlled on that phone.
 3. Tap **New**, choose OMP, Claude, or Codex, select an allowed project, optionally add a prompt, and start the agent in a new tmux window.
 4. Tap a session.
 5. Read the latest pane output.
@@ -60,7 +61,7 @@ The mobile board follows the supplied k-stack reference:
 
 - Dark, low-chrome top bar with C3 identity and connection state.
 - Agent count and search directly under the bar.
-- **Attention / Groups** switches between urgency ordering and desktop-configured project groups without changing the underlying sessions.
+- **Attention / Groups / Recent** switches between urgency ordering, desktop-configured project groups, and device-local phone activity without changing the underlying sessions.
 - **New agent** opens a focused launch sheet with a three-agent selector, searchable project catalog, optional initial prompt, and one start action.
 - Two-column session cards on wider phones; one column on narrow screens or at accessibility text sizes.
 - Project/session name, current task or pending action, explicit state label, agent kind, and a small state light.
@@ -178,6 +179,7 @@ C3 instead samples tmux's already-rendered pane, preserves safe ANSI styling, an
 - Clients poll session summaries every 3 seconds.
 - An open pane defaults to a bounded 250 ms SSE stream that sends only changed revisions. **Saver** mode uses the prior 1.5-second snapshot polling path.
 - Capture revisions prevent unchanged streams from rebuilding the terminal view.
+- Recent interaction timestamps are stored only on the current browser origin or in the native app's local preferences. Opening a session or successfully sending text or navigation keys moves it to the top; untouched sessions remain below interacted sessions.
 - Stream failures preserve the last readable pane, fall back to snapshot polling, and reconnect with bounded backoff.
 - Server configuration changes restart only the remote listener, not C3 or tmux scanning.
 - Sending input resolves the session ID against C3’s current in-memory map immediately before writing.

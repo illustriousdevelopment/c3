@@ -117,7 +117,7 @@
       margin-bottom: 13px;
       padding: 3px;
       display: grid;
-      grid-template-columns: 1fr 1fr;
+      grid-template-columns: repeat(3, 1fr);
       border: 1px solid #4a5260;
       border-radius: 8px;
       background: #0d0f14;
@@ -157,7 +157,10 @@
     .session-task { min-height: 39px; margin: 0 0 14px; color: var(--muted); font-size: 14px; line-height: 1.35; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
     .state-label { margin: 0 0 6px; color: #9da5b1; font-size: 12px; font-weight: 780; letter-spacing: .065em; }
     .attention { margin: 0; color: var(--text); font-size: 15px; line-height: 1.32; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
-    .agent-kind { margin-top: 13px; color: #8f98a5; font-size: 12px; text-transform: lowercase; }
+    .card-footer { margin-top: 13px; display: flex; justify-content: space-between; gap: 8px; color: #8f98a5; font-size: 12px; }
+    .agent-kind { text-transform: lowercase; }
+    .phone-activity { color: var(--muted); text-align: right; }
+    .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
     .group-list { display: grid; gap: 22px; }
     .group-section { min-width: 0; }
     .group-heading {
@@ -465,6 +468,7 @@
         <div class="view-switch" role="group" aria-label="Session view">
           <button id="attention-view-button" class="active" type="button" aria-pressed="true">Attention</button>
           <button id="groups-view-button" type="button" aria-pressed="false">Groups</button>
+          <button id="recent-view-button" type="button" aria-pressed="false">Recent</button>
         </div>
         <div id="session-grid" class="session-grid"></div>
         <div id="board-empty" class="empty" hidden><strong>No agent panes</strong>C3 will add sessions when an agent starts in tmux.</div>
@@ -551,6 +555,8 @@
         projectQuery: '',
         launching: false,
         boardFingerprint: '',
+        standardDashboardFingerprint: '',
+        recentDashboardFingerprint: '',
         searchQuery: '',
         selectedId: null,
         returnFocusSessionId: null,
@@ -566,6 +572,7 @@
         keyQueue: [],
         keySending: false,
         sendingResponse: false,
+        recentInteractions: loadRecentInteractions(),
       };
       const attentionOrder = { awaiting_permission: 0, awaiting_input: 1, processing: 2, spawning: 2, error: 3, complete: 4 };
       const stateLabel = (value) => ({
@@ -640,7 +647,113 @@
         return parts.at(-1) || session.projectPath;
       }
 
-      function renderSessionCard(session) {
+      function loadRecentInteractions() {
+        try {
+          const stored = JSON.parse(localStorage.getItem('c3.remote.recentInteractions') || '{}');
+          return Object.fromEntries(Object.entries(stored).filter(
+            ([id, timestamp]) => id && Number.isFinite(timestamp) && timestamp > 0
+          ));
+        } catch {
+          return {};
+        }
+      }
+
+      function saveRecentInteractions() {
+        localStorage.setItem(
+          'c3.remote.recentInteractions',
+          JSON.stringify(state.recentInteractions)
+        );
+      }
+
+      function pruneRecentInteractions() {
+        const currentIds = new Set(state.sessions.map((session) => session.id));
+        const next = Object.fromEntries(
+          Object.entries(state.recentInteractions)
+            .filter(([id]) => currentIds.has(id))
+            .sort((left, right) => right[1] - left[1])
+            .slice(0, 200)
+        );
+        const changed = JSON.stringify(next) !== JSON.stringify(state.recentInteractions);
+        if (changed) {
+          state.recentInteractions = next;
+          saveRecentInteractions();
+        }
+        return changed;
+      }
+
+      function recordPhoneInteraction(sessionId) {
+        state.recentInteractions[sessionId] = Date.now();
+        saveRecentInteractions();
+        if (!$('board').hidden && state.boardMode === 'recent') renderBoard();
+      }
+
+      function phoneActivity(sessionId) {
+        const timestamp = state.recentInteractions[sessionId];
+        if (!timestamp) {
+          return {
+            visual: 'not opened here',
+            accessible: 'No interaction on this phone',
+          };
+        }
+        const elapsedSeconds = Math.max(0, Math.floor((Date.now() - timestamp) / 1000));
+        if (elapsedSeconds < 60) {
+          return {
+            visual: 'phone · now',
+            accessible: 'Last interaction on this phone, just now',
+          };
+        }
+        if (elapsedSeconds < 3600) {
+          const minutes = Math.floor(elapsedSeconds / 60);
+          return {
+            visual: `phone · ${minutes}m`,
+            accessible: `Last interaction on this phone, ${minutes} ${minutes === 1 ? 'minute' : 'minutes'} ago`,
+          };
+        }
+        if (elapsedSeconds < 86400) {
+          const hours = Math.floor(elapsedSeconds / 3600);
+          return {
+            visual: `phone · ${hours}h`,
+            accessible: `Last interaction on this phone, ${hours} ${hours === 1 ? 'hour' : 'hours'} ago`,
+          };
+        }
+        const days = Math.floor(elapsedSeconds / 86400);
+        return {
+          visual: `phone · ${days}d`,
+          accessible: `Last interaction on this phone, ${days} ${days === 1 ? 'day' : 'days'} ago`,
+        };
+      }
+
+      function sessionsByPhoneRecency(sessions) {
+        return [...sessions].sort((left, right) => {
+          const leftTimestamp = state.recentInteractions[left.id] || 0;
+          const rightTimestamp = state.recentInteractions[right.id] || 0;
+          if (leftTimestamp !== rightTimestamp) return rightTimestamp - leftTimestamp;
+          const priority = (attentionOrder[left.state] ?? 9) - (attentionOrder[right.state] ?? 9);
+          return priority
+            || displayName(left).localeCompare(displayName(right))
+            || left.id.localeCompare(right.id);
+        });
+      }
+
+      function recentDashboardFingerprint(dashboard) {
+        return JSON.stringify(
+          (dashboard.sessions || [])
+            .map((session) => ({
+              id: session.id,
+              projectName: displayName(session),
+              projectPath: session.projectPath,
+              agentKind: session.agentKind,
+              state: session.state,
+              pendingAction: session.pendingAction,
+            }))
+            .sort((left, right) => left.id.localeCompare(right.id))
+        );
+      }
+
+      function renderSessionCard(session, activity = null) {
+        const activityMarkup = activity === null
+          ? ''
+          : `<span class="phone-activity" aria-hidden="true">${escapeHtml(activity.visual)}</span><span class="phone-activity-accessible sr-only">${escapeHtml(activity.accessible)}</span>`;
         return `
           <button class="session-card" type="button" data-session-id="${escapeHtml(session.id)}">
             <span class="state-light ${escapeHtml(session.state)}" aria-hidden="true"></span>
@@ -648,8 +761,22 @@
             <p class="session-task">${escapeHtml(sessionSummary(session))}</p>
             <div class="state-label">${escapeHtml(stateLabel(session.state))}</div>
             <p class="attention">${escapeHtml(session.pendingAction?.description || (session.state === 'processing' ? 'Agent is working' : 'Review the latest pane output'))}</p>
-            <div class="agent-kind">${escapeHtml(session.agentKind || 'agent')}</div>
+            <div class="card-footer"><span class="agent-kind">${escapeHtml(session.agentKind || 'agent')}</span>${activityMarkup}</div>
           </button>`;
+      }
+
+      function refreshPhoneActivityLabels() {
+        document.querySelectorAll('.session-card[data-session-id]').forEach((card) => {
+          const activity = phoneActivity(card.dataset.sessionId);
+          const visual = card.querySelector('.phone-activity');
+          const accessible = card.querySelector('.phone-activity-accessible');
+          if (visual && visual.textContent !== activity.visual) {
+            visual.textContent = activity.visual;
+          }
+          if (accessible && accessible.textContent !== activity.accessible) {
+            accessible.textContent = activity.accessible;
+          }
+        });
       }
 
       function filteredSessions() {
@@ -693,8 +820,10 @@
           : `${sessions.length} ${sessions.length === 1 ? 'agent' : 'agents'}`;
         $('attention-view-button').classList.toggle('active', state.boardMode === 'attention');
         $('groups-view-button').classList.toggle('active', state.boardMode === 'groups');
+        $('recent-view-button').classList.toggle('active', state.boardMode === 'recent');
         $('attention-view-button').setAttribute('aria-pressed', String(state.boardMode === 'attention'));
         $('groups-view-button').setAttribute('aria-pressed', String(state.boardMode === 'groups'));
+        $('recent-view-button').setAttribute('aria-pressed', String(state.boardMode === 'recent'));
 
         $('board-empty').hidden = sessions.length > 0;
         $('board-empty').innerHTML = state.sessions.length
@@ -703,7 +832,12 @@
 
         if (state.boardMode === 'attention') {
           $('session-grid').className = 'session-grid';
-          $('session-grid').innerHTML = sessions.map(renderSessionCard).join('');
+          $('session-grid').innerHTML = sessions.map((session) => renderSessionCard(session)).join('');
+        } else if (state.boardMode === 'recent') {
+          $('session-grid').className = 'session-grid';
+          $('session-grid').innerHTML = sessionsByPhoneRecency(sessions)
+            .map((session) => renderSessionCard(session, phoneActivity(session.id)))
+            .join('');
         } else {
           $('session-grid').className = 'group-list';
           if (!sessions.length) {
@@ -739,13 +873,22 @@
       async function refreshBoard() {
         try {
           const dashboard = await api('/api/dashboard');
-          const fingerprint = JSON.stringify(dashboard);
+          const standardFingerprint = JSON.stringify(dashboard);
+          const recentFingerprint = recentDashboardFingerprint(dashboard);
+          state.standardDashboardFingerprint = standardFingerprint;
+          state.recentDashboardFingerprint = recentFingerprint;
+          const fingerprint = state.boardMode === 'recent'
+            ? recentFingerprint
+            : standardFingerprint;
           state.sessions = dashboard.sessions || [];
           state.sessionMeta = dashboard.sessionMeta?.sessions || {};
           state.groups = dashboard.sessionMeta?.groups || [];
-          if (fingerprint !== state.boardFingerprint) {
+          const recentChanged = pruneRecentInteractions();
+          if (fingerprint !== state.boardFingerprint || recentChanged) {
             state.boardFingerprint = fingerprint;
             renderBoard();
+          } else if (state.boardMode === 'recent') {
+            refreshPhoneActivityLabels();
           }
           if (!state.selectedId) setConnection('online', 'Connected');
           $('updated').textContent = 'now';
@@ -1064,6 +1207,7 @@
       function openDetail(id) {
         const session = state.sessions.find((item) => item.id === id);
         if (!session) return;
+        recordPhoneInteraction(id);
         state.returnFocusSessionId = id;
         state.selectedId = id;
         state.paneRevision = '';
@@ -1091,6 +1235,7 @@
         $('detail').hidden = true;
         $('board').hidden = false;
         setConnection('online', 'Connected');
+        renderBoard();
         if (updateHistory) history.pushState({}, '', window.location.pathname);
         const card = returnFocusSessionId
           ? document.querySelector(`[data-session-id="${CSS.escape(returnFocusSessionId)}"]`)
@@ -1123,10 +1268,17 @@
       });
       $('attention-view-button').addEventListener('click', () => {
         state.boardMode = 'attention';
+        state.boardFingerprint = state.standardDashboardFingerprint;
         renderBoard();
       });
       $('groups-view-button').addEventListener('click', () => {
         state.boardMode = 'groups';
+        state.boardFingerprint = state.standardDashboardFingerprint;
+        renderBoard();
+      });
+      $('recent-view-button').addEventListener('click', () => {
+        state.boardMode = 'recent';
+        state.boardFingerprint = state.recentDashboardFingerprint;
         renderBoard();
       });
       $('new-agent-button').addEventListener('click', openLaunchSheet);
@@ -1164,6 +1316,7 @@
         state.keySending = true;
         updateComposerControls();
         let lastLabel = '';
+        const touchedSessionIds = new Set();
         while (state.keyQueue.length) {
           const input = state.keyQueue.shift();
           try {
@@ -1172,6 +1325,7 @@
               body: JSON.stringify({ sessionId: input.sessionId, key: input.key }),
             });
             lastLabel = input.label;
+            touchedSessionIds.add(input.sessionId);
           } catch (error) {
             state.keyQueue = [];
             $('send-status').className = 'send-status error';
@@ -1179,6 +1333,7 @@
             break;
           }
         }
+        touchedSessionIds.forEach(recordPhoneInteraction);
         state.keySending = false;
         updateComposerControls();
         if (lastLabel && !$('send-status').classList.contains('error')) {
@@ -1223,6 +1378,7 @@
         $('send-status').textContent = 'Sending…';
         try {
           await api('/api/input', { method: 'POST', body: JSON.stringify({ sessionId: state.selectedId, text, submit: true }) });
+          recordPhoneInteraction(state.selectedId);
           $('response').value = '';
           $('send-status').textContent = 'Sent';
           setTimeout(() => { if ($('send-status').textContent === 'Sent') $('send-status').textContent = ''; }, 1800);
